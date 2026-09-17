@@ -336,3 +336,16 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--primary); b
 @media (max-width: 800px) {
   .weather-forecast { grid-template-columns: repeat(4, 1fr); }
 }
+
+/* --- Live Traffic Map --- */
+.map-card { margin-bottom: 2rem; padding: 1.75rem; }
+.map-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1.25rem; flex-wrap: wrap; }
+.map-head h3 { color: var(--text-bright); font-size: 1rem; }
+.map-legend { display: flex; gap: 1rem; flex-wrap: wrap; }
+.map-legend span { display: flex; align-items: center; gap: 0.4rem; font-size: 0.75rem; color: var(--text-dim); }
+.map-legend i { width: 12px; height: 4px; border-radius: 2px; display: inline-block; }
+.map-container { height: 380px; width: 100%; border-radius: var(--radius); overflow: hidden; border: 1px solid var(--border); }
+.map-card code { background: #0d1117; border: 1px solid var(--border); padding: 0.1rem 0.4rem; border-radius: 4px; font-size: 0.85em; }
+
+/* Keep Mapbox controls legible on the dark theme */
+.map-container .mapboxgl-ctrl-attrib { font-size: 0.65rem; }

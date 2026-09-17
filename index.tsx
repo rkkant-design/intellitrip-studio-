@@ -3,8 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
+import mapboxgl from 'mapbox-gl';
+import 'mapbox-gl/dist/mapbox-gl.css';
+
+// Mapbox public token (safe to expose; restrict by URL in Mapbox settings).
+const MAPBOX_TOKEN = (import.meta as any).env?.VITE_MAPBOX_TOKEN as string | undefined;
 
 // --- TYPES ---
 
@@ -253,6 +258,114 @@ const WeatherTracker = ({ destination }: { destination: string }) => {
           <p className="weather-note">Current 7-day outlook for the destination (updates in real time).</p>
         </>
       )}
+    </div>
+  );
+};
+
+// --- LIVE TRAFFIC MAP (Mapbox GL + live traffic tiles) ---
+
+const CONGESTION_COLORS: Record<string, string> = {
+  low: '#3fb950',
+  moderate: '#f2cc60',
+  heavy: '#f85149',
+  severe: '#b62324',
+};
+
+const TrafficMap = ({ destination }: { destination: string }) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const mapRef = useRef<any>(null);
+  const [error, setError] = useState<'token' | 'locate' | null>(MAPBOX_TOKEN ? null : 'token');
+
+  useEffect(() => {
+    if (!MAPBOX_TOKEN || !destination.trim() || !containerRef.current) return;
+    let cancelled = false;
+
+    const init = async () => {
+      try {
+        const geoRes = await fetch(
+          `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(destination)}&count=1&language=en&format=json`
+        );
+        const geo = await geoRes.json();
+        const loc = geo?.results?.[0];
+        if (!loc) throw new Error('locate');
+        if (cancelled || !containerRef.current) return;
+
+        mapboxgl.accessToken = MAPBOX_TOKEN;
+        const map = new mapboxgl.Map({
+          container: containerRef.current,
+          style: 'mapbox://styles/mapbox/dark-v11',
+          center: [loc.longitude, loc.latitude],
+          zoom: 11,
+          attributionControl: true,
+        });
+        mapRef.current = map;
+        map.addControl(new mapboxgl.NavigationControl(), 'top-right');
+        new mapboxgl.Marker({ color: '#58a6ff' })
+          .setLngLat([loc.longitude, loc.latitude])
+          .addTo(map);
+
+        map.on('load', () => {
+          map.addSource('mapbox-traffic', {
+            type: 'vector',
+            url: 'mapbox://mapbox.mapbox-traffic-v1',
+          });
+          map.addLayer({
+            id: 'traffic',
+            type: 'line',
+            source: 'mapbox-traffic',
+            'source-layer': 'traffic',
+            paint: {
+              'line-width': 2.5,
+              'line-color': [
+                'match',
+                ['get', 'congestion'],
+                'low', CONGESTION_COLORS.low,
+                'moderate', CONGESTION_COLORS.moderate,
+                'heavy', CONGESTION_COLORS.heavy,
+                'severe', CONGESTION_COLORS.severe,
+                '#8b949e',
+              ],
+            },
+          });
+        });
+      } catch {
+        if (!cancelled) setError('locate');
+      }
+    };
+
+    init();
+    return () => {
+      cancelled = true;
+      if (mapRef.current) {
+        mapRef.current.remove();
+        mapRef.current = null;
+      }
+    };
+  }, [destination]);
+
+  return (
+    <div className="card map-card">
+      <div className="map-head">
+        <h3>Live Traffic</h3>
+        {!error && (
+          <div className="map-legend" aria-hidden="true">
+            <span><i style={{ background: CONGESTION_COLORS.low }} />Free</span>
+            <span><i style={{ background: CONGESTION_COLORS.moderate }} />Moderate</span>
+            <span><i style={{ background: CONGESTION_COLORS.heavy }} />Heavy</span>
+            <span><i style={{ background: CONGESTION_COLORS.severe }} />Severe</span>
+          </div>
+        )}
+      </div>
+
+      {error === 'token' && (
+        <p className="weather-status">
+          Live traffic map is not configured yet. Add a <code>VITE_MAPBOX_TOKEN</code> to enable it.
+        </p>
+      )}
+      {error === 'locate' && (
+        <p className="weather-status weather-error">Couldn't place "{destination}" on the map.</p>
+      )}
+      {!error && <div ref={containerRef} className="map-container" />}
     </div>
   );
 };
@@ -578,6 +691,8 @@ const Dashboard: React.FC<{ user: { name: string }; onLogout: () => void }> = ({
             </div>
 
             <WeatherTracker destination={form.destination} />
+
+            <TrafficMap destination={form.destination} />
 
             <div className="radar-grid-layout">
               <div className="alerts-feed">
