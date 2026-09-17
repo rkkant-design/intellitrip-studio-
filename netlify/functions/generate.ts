@@ -117,6 +117,29 @@ const extractJson = (text: string) => {
   return JSON.parse(text.substring(start, end));
 };
 
+// Transient, worth-retrying failures: the model is temporarily overloaded.
+const isTransient = (err: unknown) => {
+  const m = String((err as any)?.message ?? err);
+  return m.includes('"code":503') || m.includes('UNAVAILABLE') || m.includes('overloaded');
+};
+
+async function withRetry<T>(fn: () => Promise<T>, attempts = 3, baseDelayMs = 1500): Promise<T> {
+  let lastErr: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (i < attempts - 1 && isTransient(err)) {
+        await new Promise((r) => setTimeout(r, baseDelayMs * (i + 1)));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr;
+}
+
 const handler: Handler = async (event: HandlerEvent) => {
   if (event.httpMethod !== 'POST') {
     return json(405, { error: 'Method not allowed.' });
@@ -165,55 +188,61 @@ Vision: ${form.idealTripDescription || 'A memorable, well-paced trip.'}`;
   // Itinerary is required; if it fails the whole request fails.
   let itinerary;
   try {
-    const response = await ai.models.generateContent({
-      model: TEXT_MODEL,
-      contents: userMsg,
-      config: {
-        systemInstruction: systemMsg,
-        responseMimeType: 'application/json',
-        responseSchema: itinerarySchema,
-      },
-    });
+    const response = await withRetry(() =>
+      ai.models.generateContent({
+        model: TEXT_MODEL,
+        contents: userMsg,
+        config: {
+          systemInstruction: systemMsg,
+          responseMimeType: 'application/json',
+          responseSchema: itinerarySchema,
+        },
+      })
+    );
     itinerary = extractJson(response.text ?? '');
   } catch (err: any) {
     console.error('Itinerary generation failed:', err);
-    return json(502, {
-      error: 'The curation engine could not build this itinerary. Please try again.',
-      detail: err?.message || String(err),
-      model: TEXT_MODEL,
+    const overloaded = isTransient(err);
+    return json(overloaded ? 503 : 502, {
+      error: overloaded
+        ? 'The curation engine is busy right now. Please try again in a moment.'
+        : 'The curation engine could not build this itinerary. Please try again.',
     });
   }
 
-  // The vibe image is a nice-to-have: an image failure must NOT discard the
-  // successfully generated itinerary.
+  // The vibe image is a nice-to-have: an image failure (e.g. no image quota on
+  // the free tier) must NOT discard the successfully generated itinerary.
+  // Set ENABLE_VIBE_IMAGE=false to skip it entirely (avoids a wasted call when
+  // your Google project has no image-generation quota / billing).
   let vibeImage: string | null = null;
-  let imageError: string | null = null;
-  try {
-    const imageResponse = await ai.models.generateContent({
-      model: IMAGE_MODEL,
-      contents: {
-        parts: [
-          {
-            text: `A cinematic, high-quality, breathtaking travel photograph of ${destination}. Professional landscape photography, no text, vibrant atmosphere.`,
-          },
-        ],
-      },
-      config: { imageConfig: { aspectRatio: '16:9' } },
-    });
+  const imageEnabled = (process.env.ENABLE_VIBE_IMAGE ?? 'true').toLowerCase() !== 'false';
+  if (imageEnabled) {
+    try {
+      const imageResponse = await ai.models.generateContent({
+        model: IMAGE_MODEL,
+        contents: {
+          parts: [
+            {
+              text: `A cinematic, high-quality, breathtaking travel photograph of ${destination}. Professional landscape photography, no text, vibrant atmosphere.`,
+            },
+          ],
+        },
+        config: { imageConfig: { aspectRatio: '16:9' } },
+      });
 
-    const parts = imageResponse.candidates?.[0]?.content?.parts ?? [];
-    for (const part of parts) {
-      if (part.inlineData?.data) {
-        vibeImage = `data:image/png;base64,${part.inlineData.data}`;
-        break;
+      const parts = imageResponse.candidates?.[0]?.content?.parts ?? [];
+      for (const part of parts) {
+        if (part.inlineData?.data) {
+          vibeImage = `data:image/png;base64,${part.inlineData.data}`;
+          break;
+        }
       }
+    } catch (err) {
+      console.error('Vibe image generation failed (continuing without it):', err);
     }
-  } catch (err: any) {
-    console.error('Vibe image generation failed (continuing without it):', err);
-    imageError = err?.message || String(err);
   }
 
-  return json(200, { itinerary, vibeImage, imageError });
+  return json(200, { itinerary, vibeImage });
 };
 
 export { handler };
