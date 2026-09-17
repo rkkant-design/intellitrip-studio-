@@ -6,8 +6,8 @@ dist/
 
 # Local env / secrets — NEVER commit these
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
 
 # Netlify
 .netlify/
