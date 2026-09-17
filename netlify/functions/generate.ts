@@ -179,6 +179,8 @@ Vision: ${form.idealTripDescription || 'A memorable, well-paced trip.'}`;
     console.error('Itinerary generation failed:', err);
     return json(502, {
       error: 'The curation engine could not build this itinerary. Please try again.',
+      detail: err?.message || String(err),
+      model: TEXT_MODEL,
     });
   }
 
