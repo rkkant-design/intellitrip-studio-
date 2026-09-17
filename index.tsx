@@ -126,6 +126,137 @@ const Toast = ({ message }: { message: string }) => (
   </div>
 );
 
+// --- LIVE WEATHER (Open-Meteo: free, keyless, CORS-friendly) ---
+
+interface DailyWeather {
+  date: string;
+  code: number;
+  tMax: number;
+  tMin: number;
+  precip: number;
+}
+
+const WMO: Record<number, { icon: string; label: string }> = {
+  0: { icon: '☀️', label: 'Clear' },
+  1: { icon: '🌤️', label: 'Mainly clear' },
+  2: { icon: '⛅', label: 'Partly cloudy' },
+  3: { icon: '☁️', label: 'Overcast' },
+  45: { icon: '🌫️', label: 'Fog' },
+  48: { icon: '🌫️', label: 'Rime fog' },
+  51: { icon: '🌦️', label: 'Light drizzle' },
+  53: { icon: '🌦️', label: 'Drizzle' },
+  55: { icon: '🌦️', label: 'Dense drizzle' },
+  61: { icon: '🌧️', label: 'Light rain' },
+  63: { icon: '🌧️', label: 'Rain' },
+  65: { icon: '🌧️', label: 'Heavy rain' },
+  71: { icon: '🌨️', label: 'Light snow' },
+  73: { icon: '❄️', label: 'Snow' },
+  75: { icon: '❄️', label: 'Heavy snow' },
+  80: { icon: '🌦️', label: 'Rain showers' },
+  81: { icon: '🌧️', label: 'Showers' },
+  82: { icon: '⛈️', label: 'Violent showers' },
+  95: { icon: '⛈️', label: 'Thunderstorm' },
+  96: { icon: '⛈️', label: 'Storm + hail' },
+  99: { icon: '⛈️', label: 'Severe storm' },
+};
+
+const describeWeather = (code: number) => WMO[code] ?? { icon: '🌡️', label: '—' };
+
+const dayLabel = (iso: string) =>
+  new Date(iso + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' });
+
+const WeatherTracker = ({ destination }: { destination: string }) => {
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [place, setPlace] = useState<string>('');
+  const [days, setDays] = useState<DailyWeather[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      if (!destination.trim()) return;
+      setLoading(true);
+      setError(null);
+      try {
+        const geoRes = await fetch(
+          `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(destination)}&count=1&language=en&format=json`
+        );
+        const geo = await geoRes.json();
+        const loc = geo?.results?.[0];
+        if (!loc) throw new Error(`Couldn't locate "${destination}" for a forecast.`);
+
+        const params = new URLSearchParams({
+          latitude: String(loc.latitude),
+          longitude: String(loc.longitude),
+          daily: 'weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max',
+          timezone: 'auto',
+          forecast_days: '7',
+        });
+        const wRes = await fetch(`https://api.open-meteo.com/v1/forecast?${params.toString()}`);
+        const w = await wRes.json();
+        const times: string[] = w?.daily?.time ?? [];
+        const parsed: DailyWeather[] = times.map((date, i) => ({
+          date,
+          code: w.daily.weather_code[i],
+          tMax: Math.round(w.daily.temperature_2m_max[i]),
+          tMin: Math.round(w.daily.temperature_2m_min[i]),
+          precip: w.daily.precipitation_probability_max?.[i] ?? 0,
+        }));
+        if (!cancelled) {
+          setPlace(`${loc.name}${loc.country ? ', ' + loc.country : ''}`);
+          setDays(parsed);
+        }
+      } catch (e: any) {
+        if (!cancelled) setError(e?.message || 'Weather is currently unavailable.');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [destination]);
+
+  const today = days[0];
+
+  return (
+    <div className="card weather-card">
+      <div className="weather-head">
+        <h3>Live Weather</h3>
+        {place && <span className="weather-place">{place}</span>}
+      </div>
+
+      {loading && <p className="weather-status">Fetching current conditions…</p>}
+      {error && !loading && <p className="weather-status weather-error">{error}</p>}
+
+      {!loading && !error && today && (
+        <>
+          <div className="weather-now">
+            <span className="weather-now-icon" aria-hidden="true">{describeWeather(today.code).icon}</span>
+            <div className="weather-now-info">
+              <strong>{today.tMax}° / {today.tMin}°C</strong>
+              <span>{describeWeather(today.code).label} · {today.precip}% precip.</span>
+            </div>
+          </div>
+          <div className="weather-forecast">
+            {days.slice(0, 7).map((d) => (
+              <div key={d.date} className="weather-day" title={describeWeather(d.code).label}>
+                <span className="wd-label">{dayLabel(d.date)}</span>
+                <span className="wd-icon" aria-hidden="true">{describeWeather(d.code).icon}</span>
+                <span className="wd-temp">{d.tMax}°</span>
+                <span className="wd-min">{d.tMin}°</span>
+                {d.precip >= 30 && <span className="wd-precip">💧{d.precip}%</span>}
+              </div>
+            ))}
+          </div>
+          <p className="weather-note">Current 7-day outlook for the destination (updates in real time).</p>
+        </>
+      )}
+    </div>
+  );
+};
+
 // --- MAIN DASHBOARD ---
 
 const Dashboard: React.FC<{ user: { name: string }; onLogout: () => void }> = ({ user, onLogout }) => {
@@ -445,6 +576,8 @@ const Dashboard: React.FC<{ user: { name: string }; onLogout: () => void }> = ({
               <h2>Trip Environmental Briefing</h2>
               <p>Curated context for <strong>{form.destination}</strong></p>
             </div>
+
+            <WeatherTracker destination={form.destination} />
 
             <div className="radar-grid-layout">
               <div className="alerts-feed">
