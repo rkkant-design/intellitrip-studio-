@@ -13,7 +13,64 @@ import { GoogleGenAI, Type } from '@google/genai';
 // Models are configurable via env so we can move between Gemini versions
 // without a code change. Defaults are current GA models.
 const TEXT_MODEL = process.env.GEMINI_TEXT_MODEL || 'gemini-3.6-flash';
-const IMAGE_MODEL = process.env.GEMINI_IMAGE_MODEL || 'gemini-2.5-flash-image';
+// gemini-2.5-flash-image is deprecated (shutdown 2026-10-02) -> use 3.1-flash-image.
+const IMAGE_MODEL = process.env.GEMINI_IMAGE_MODEL || 'gemini-3.1-flash-image';
+
+// --- Interim abuse protection (until real auth lands) ---
+// Best-effort per-IP rate limit. Netlify functions are serverless, so this
+// counter lives per warm instance (resets on cold start, not shared across
+// concurrent instances). It blocks naive loops for free; a shared store
+// (Netlify Blobs / Upstash) is the robust upgrade path once auth is in.
+const RATE_LIMIT = Number(process.env.RATE_LIMIT_PER_MIN || 10);
+const WINDOW_MS = 60_000;
+const hitStore: Map<string, number[]> =
+  ((globalThis as any).__itHits ??= new Map<string, number[]>());
+
+const clientIp = (event: HandlerEvent): string =>
+  event.headers['x-nf-client-connection-ip'] ||
+  (event.headers['x-forwarded-for'] || '').split(',')[0].trim() ||
+  'unknown';
+
+const isRateLimited = (ip: string): boolean => {
+  const now = Date.now();
+  const recent = (hitStore.get(ip) || []).filter((t) => now - t < WINDOW_MS);
+  recent.push(now);
+  hitStore.set(ip, recent);
+  if (hitStore.size > 5000) {
+    // Prevent unbounded growth on a long-lived instance.
+    for (const [k, v] of hitStore) {
+      if (!v.some((t) => now - t < WINDOW_MS)) hitStore.delete(k);
+    }
+  }
+  return recent.length > RATE_LIMIT;
+};
+
+// Same-origin gate: the app is browser-only, so a legitimate request always
+// carries an Origin/Referer from our own site. Reject anything else (blocks
+// casual curl/bot loops and other sites calling the endpoint). Extra hosts can
+// be allowed via ALLOWED_ORIGINS (comma-separated host names).
+const extraAllowed = (process.env.ALLOWED_ORIGINS || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+const isAllowedOrigin = (event: HandlerEvent): boolean => {
+  const host = event.headers.host || '';
+  const source = event.headers.origin || event.headers.referer || '';
+  if (!source) return false;
+  let reqHost = '';
+  try {
+    reqHost = new URL(source).host;
+  } catch {
+    return false;
+  }
+  return (
+    reqHost === host ||
+    reqHost.startsWith('localhost') ||
+    reqHost.startsWith('127.0.0.1') ||
+    extraAllowed.includes(reqHost)
+  );
+};
 
 interface GenerateRequest {
   fromLocation?: string;
@@ -143,6 +200,14 @@ async function withRetry<T>(fn: () => Promise<T>, attempts = 3, baseDelayMs = 15
 const handler: Handler = async (event: HandlerEvent) => {
   if (event.httpMethod !== 'POST') {
     return json(405, { error: 'Method not allowed.' });
+  }
+
+  // Interim abuse protection (runs before we spend any Gemini quota).
+  if (!isAllowedOrigin(event)) {
+    return json(403, { error: 'Forbidden.' });
+  }
+  if (isRateLimited(clientIp(event))) {
+    return json(429, { error: 'Too many requests. Please wait a moment and try again.' });
   }
 
   const apiKey = process.env.GEMINI_API_KEY;
