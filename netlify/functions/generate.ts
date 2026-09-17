@@ -12,7 +12,7 @@ import { GoogleGenAI, Type } from '@google/genai';
 
 // Models are configurable via env so we can move between Gemini versions
 // without a code change. Defaults are current GA models.
-const TEXT_MODEL = process.env.GEMINI_TEXT_MODEL || 'gemini-2.5-flash';
+const TEXT_MODEL = process.env.GEMINI_TEXT_MODEL || 'gemini-3.6-flash';
 const IMAGE_MODEL = process.env.GEMINI_IMAGE_MODEL || 'gemini-2.5-flash-image';
 
 interface GenerateRequest {
@@ -187,6 +187,7 @@ Vision: ${form.idealTripDescription || 'A memorable, well-paced trip.'}`;
   // The vibe image is a nice-to-have: an image failure must NOT discard the
   // successfully generated itinerary.
   let vibeImage: string | null = null;
+  let imageError: string | null = null;
   try {
     const imageResponse = await ai.models.generateContent({
       model: IMAGE_MODEL,
@@ -207,11 +208,12 @@ Vision: ${form.idealTripDescription || 'A memorable, well-paced trip.'}`;
         break;
       }
     }
-  } catch (err) {
+  } catch (err: any) {
     console.error('Vibe image generation failed (continuing without it):', err);
+    imageError = err?.message || String(err);
   }
 
-  return json(200, { itinerary, vibeImage });
+  return json(200, { itinerary, vibeImage, imageError });
 };
 
 export { handler };
