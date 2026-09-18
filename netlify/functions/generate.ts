@@ -9,6 +9,7 @@
 
 import type { Handler, HandlerEvent } from '@netlify/functions';
 import { GoogleGenAI, Type } from '@google/genai';
+import { createRemoteJWKSet, jwtVerify } from 'jose';
 
 // Models are configurable via env so we can move between Gemini versions
 // without a code change. Defaults are current GA models.
@@ -53,6 +54,33 @@ const extraAllowed = (process.env.ALLOWED_ORIGINS || '')
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean);
+
+// --- Firebase ID token verification ---
+// Auth is REQUIRED once FIREBASE_PROJECT_ID is set (so the app keeps working in
+// interim mode until Firebase is provisioned). Tokens are verified against
+// Google's public keys — no service-account secret needed.
+const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID;
+const AUTH_REQUIRED = Boolean(FIREBASE_PROJECT_ID);
+const firebaseJwks = FIREBASE_PROJECT_ID
+  ? createRemoteJWKSet(
+      new URL('https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com')
+    )
+  : null;
+
+// Returns the caller's uid, or null when auth is not required. Throws on a
+// missing/invalid token when auth IS required.
+const verifyAuth = async (event: HandlerEvent): Promise<string | null> => {
+  if (!AUTH_REQUIRED || !firebaseJwks) return null;
+  const authz = event.headers.authorization || event.headers.Authorization || '';
+  const match = /^Bearer (.+)$/.exec(authz as string);
+  if (!match) throw new Error('Missing bearer token');
+  const { payload } = await jwtVerify(match[1], firebaseJwks, {
+    issuer: `https://securetoken.google.com/${FIREBASE_PROJECT_ID}`,
+    audience: FIREBASE_PROJECT_ID,
+  });
+  if (!payload.sub) throw new Error('Token has no subject');
+  return payload.sub;
+};
 
 const isAllowedOrigin = (event: HandlerEvent): boolean => {
   const host = event.headers.host || '';
@@ -202,11 +230,21 @@ const handler: Handler = async (event: HandlerEvent) => {
     return json(405, { error: 'Method not allowed.' });
   }
 
-  // Interim abuse protection (runs before we spend any Gemini quota).
+  // Abuse protection (runs before we spend any Gemini quota).
   if (!isAllowedOrigin(event)) {
     return json(403, { error: 'Forbidden.' });
   }
-  if (isRateLimited(clientIp(event))) {
+
+  // Require a valid Firebase login once auth is provisioned.
+  let uid: string | null = null;
+  try {
+    uid = await verifyAuth(event);
+  } catch {
+    return json(401, { error: 'Please sign in to continue.' });
+  }
+
+  // Rate limit per signed-in user when available, else per IP.
+  if (isRateLimited(uid || clientIp(event))) {
     return json(429, { error: 'Too many requests. Please wait a moment and try again.' });
   }
 

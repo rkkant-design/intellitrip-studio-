@@ -349,3 +349,12 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--primary); b
 
 /* Keep Mapbox controls legible on the dark theme */
 .map-container .mapboxgl-ctrl-attrib { font-size: 0.65rem; }
+
+/* --- Google sign-in button --- */
+.google-btn {
+  display: flex; align-items: center; justify-content: center; gap: 0.75rem;
+  background: #fff; color: #1f1f1f;
+}
+.google-btn:hover { filter: brightness(0.97); }
+.google-btn:disabled { opacity: 0.7; cursor: not-allowed; }
+.google-btn svg { flex-shrink: 0; }

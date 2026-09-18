@@ -11,6 +11,8 @@
   },
   "dependencies": {
     "@google/genai": "^1.13.0",
+    "firebase": "^11.1.0",
+    "jose": "^5.9.6",
     "mapbox-gl": "^3.7.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
