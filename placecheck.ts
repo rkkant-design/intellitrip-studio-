@@ -58,6 +58,7 @@ const GENERIC = new Set([
   'ride', 'road', 'shop', 'short', 'shri', 'spot', 'sree', 'sri', 'stall', 'start', 'stay', 'stop', 'stroll',
   'sunrise', 'sunset', 'tea', 'temple', 'the', 'tiffin', 'to', 'top', 'trail', 'unwind', 'veg', 'vegetarian', 'view',
   'viewpoint', 'village', 'visit', 'walk', 'waterfall', 'arulmigu', 'tamil', 'nadu', 'kerala', 'karnataka', 'india',
+  'ticket', 'tickets', 'entrance', 'entry', 'counter', 'trailhead', 'base',
 ]);
 
 const tokens = (s: string) =>
@@ -111,8 +112,12 @@ const kindFits = (kind: Kind, osmKey: string, osmValue: string) => {
   if (NEVER_KEYS.has(osmKey) || NEVER_VALUES.has(osmValue)) return false;
   if (kind === 'food') return FOOD.has(osmValue);
   if (kind === 'stay') return STAY.has(osmValue) || osmValue === 'resort';
-  return true;
+  // A viewpoint, temple or walk is never a restaurant or a hotel ("Selvi Koil Point" is not "Selvi Mess").
+  return !FOOD.has(osmValue) && !STAY.has(osmValue);
 };
+
+// Names that say a place is somewhere to eat, whatever list the plan put it in.
+const FOOD_NAME = /\b(hotel|restaurant|mess|bhavan|bhavans|cafe|café|coffee|juice|bakery|bakers|idli|tiffin|dhaba|canteen|sweets|biryani|kitchen|eatery|annapoorna|saravana)\b/i;
 
 const km = (a: { lat: number; lon: number }, b: { lat: number; lon: number }) => {
   const r = Math.PI / 180;
@@ -162,8 +167,12 @@ const townCache = new Map<string, Point | null>();
 const townOnly = (name: string) =>
   name.split(/[,(/—–]| - /)[0].replace(/\b(junction|jn|bypass|road|bus stand|town|city|centre|center)\b\.?/gi, ' ').replace(/\s+/g, ' ').trim();
 
-/** Coordinates of a town or city, from Open-Meteo's geocoder, then OpenStreetMap. */
-export async function findTown(name: string): Promise<Point | null> {
+/**
+ * Coordinates of a town, hill station or area. Candidates come from Open-Meteo's geocoder and
+ * OpenStreetMap; the first that has the right name and passes `fits` wins. Small places share names
+ * across the state (there are two Sirumalais), so callers say where the right one must be.
+ */
+export async function findTown(name: string, fits: (p: Point) => boolean = inCorridor): Promise<Point | null> {
   const first = townOnly(name);
   const key = first.toLowerCase();
   if (!key) return null;
@@ -172,13 +181,17 @@ export async function findTown(name: string): Promise<Point | null> {
   const om = await getJson(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(first)}&count=10&language=en&format=json`);
   for (const r of om?.results || []) {
     const cand = { lat: r.latitude, lon: r.longitude, name: r.name };
-    if (r.country_code === 'IN' && nameLike(first, r.name) && inCorridor(cand)) { point = cand; break; }
+    if (r.country_code === 'IN' && nameLike(first, r.name) && fits(cand)) { point = cand; break; }
   }
   if (!point) {
-    const ph = await getJson(`https://photon.komoot.io/api/?q=${encodeURIComponent(first)}&limit=5&osm_tag=place`);
+    // Hill stations are often mapped as an area (a reserve forest, a hill range), not a town.
+    const ph = await getJson(`https://photon.komoot.io/api/?q=${encodeURIComponent(first)}&limit=10`);
     for (const f of ph?.features || []) {
-      const cand = { lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0], name: f.properties?.name };
-      if (nameLike(first, String(cand.name || '')) && inCorridor(cand)) { point = cand; break; }
+      const props = f.properties || {};
+      if (!['place', 'natural', 'boundary'].includes(String(props.osm_key))) continue;
+      if (props.countrycode && props.countrycode !== 'IN') continue;
+      const cand = { lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0], name: props.name };
+      if (nameLike(first, String(cand.name || '')) && fits(cand)) { point = cand; break; }
     }
   }
   townCache.set(key, point);
@@ -264,9 +277,9 @@ export function placesWithKind(plan: Plan): { p: Place; kind: Kind }[] {
   const rt = plan.roadTrip && typeof plan.roadTrip === 'object' ? plan.roadTrip : null;
   const all: { p: Place; kind: Kind }[] = [
     ...(plan.accommodation?.name ? [{ p: plan.accommodation, kind: 'stay' as Kind }] : []),
-    ...arr(rt?.legs).flatMap((l) => arr(l.stops).map((s) => ({ p: s as Place, kind: (looksLikeFood(s.type) ? 'food' : 'sight') as Kind }))),
+    ...arr(rt?.legs).flatMap((l) => arr(l.stops).map((s) => ({ p: s as Place, kind: (looksLikeFood(s.type) || FOOD_NAME.test(s.name || '') ? 'food' : 'sight') as Kind }))),
     ...arr(rt?.foodStops).map((f) => ({ p: f as Place, kind: 'food' as Kind })),
-    ...arr(plan.days).flatMap((d) => [...arr(d.activities), ...arr(d.hiddenGems)].map((x) => ({ p: x as Place, kind: 'sight' as Kind }))),
+    ...arr(plan.days).flatMap((d) => [...arr(d.activities), ...arr(d.hiddenGems)].map((x) => ({ p: x as Place, kind: (FOOD_NAME.test(x.name || '') ? 'food' : 'sight') as Kind }))),
   ].filter(({ p }) => p && p.name && p.mapsQuery);
   const seen = new Set<string>();
   return all.filter(({ p }) => (seen.has(placeKey(p)) ? false : (seen.add(placeKey(p)), true)));
@@ -293,7 +306,13 @@ export async function checkPlan(
   inCorridor = () => true;
   nearRoute = () => true;
   const fromPt = await findTown(from);
-  const destPt = await findTown(destination);
+  // The plan's own road distance to the destination rules out namesakes far away: a place more
+  // than that far in a straight line can't be the one meant.
+  const legs0 = arr(plan.roadTrip && typeof plan.roadTrip === 'object' ? plan.roadTrip.legs : []);
+  const destWords = distinctiveWords(townOnly(destination));
+  const toDest = legs0.find((l) => l.distanceKm && destWords.some((w) => tokens(l.to || '').some((t) => sameWord(w, t))));
+  const maxStraight = toDest ? Number(toDest.distanceKm) * 1.15 + 15 : Infinity;
+  const destPt = await findTown(destination, (p) => !fromPt || km(fromPt, p) <= maxStraight);
   if (fromPt && destPt) {
     const span = km(fromPt, destPt);
     inCorridor = (p) => km(fromPt, p) + km(p, destPt) <= span * 1.5 + 80;
