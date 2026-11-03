@@ -459,3 +459,15 @@ a.tk-place.tk-place { display: inline; }
 }
 /* Let the results columns shrink on phones; wide tables scroll inside their own box. */
 .results-grid > *, .radar-grid-layout > * { min-width: 0; }
+
+/* --- Map check --- */
+.tk-place-wrap { display: inline-flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; }
+.tk-verify { display: inline-flex; align-items: center; gap: 0.2rem; font-size: 0.7rem; font-weight: 600; border-radius: 999px; line-height: 1; }
+.tk-verify .material-symbols-outlined { font-size: 1rem; }
+.tk-verify.ok { color: var(--success); }
+.tk-verify.warn { color: var(--accent); border: 1px solid rgba(242, 204, 96, 0.4); padding: 0.15rem 0.45rem 0.15rem 0.3rem; }
+.tk-roadcheck { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; font-size: 0.85rem; background: rgba(63, 185, 80, 0.07); border: 1px solid rgba(63, 185, 80, 0.25); border-radius: var(--radius); padding: 0.5rem 0.75rem; }
+.tk-roadcheck .material-symbols-outlined { color: var(--success); font-size: 1.1rem; }
+.tk-ok-text { color: var(--success); }
+.tk-warn-text { color: var(--accent); }
+.tk-mapcheck { border-color: rgba(63, 185, 80, 0.35); }

@@ -8,7 +8,11 @@
  * that waits on the AI. Everything is stored in this browser.
  */
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { type Checks, placeKey, placesIn } from './placecheck';
+
+// Map-check results for the trip on screen, so every place name can show its badge.
+const ChecksContext = createContext<Checks | null>(null);
 
 // --- TYPES ---
 
@@ -78,6 +82,7 @@ export interface SavedTrip {
   vibeImage?: string | null;
   packing?: Packing | null;
   packed?: Record<string, boolean>;
+  checks?: Checks | null;
   dateCreated: string;
 }
 
@@ -158,14 +163,70 @@ export const driveHours = (s?: string): number | null => {
   return max === null ? null : Math.round(max * 10) / 10;
 };
 
-const PlaceName = ({ p, fallback }: { p: Place; fallback?: string }) =>
-  p.mapsQuery ? (
-    <a className="tk-place" href={mapsSearch(p.mapsQuery)} target="_blank" rel="noopener noreferrer" title="Open in Google Maps">
-      {p.name || fallback || p.mapsQuery}
-    </a>
-  ) : (
-    <strong>{p.name || fallback}</strong>
+const fmtHours = (h: number) => { const m = Math.round(h * 60); return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`; };
+
+const PlaceName = ({ p, fallback }: { p: Place; fallback?: string }) => {
+  const check = useContext(ChecksContext)?.places[placeKey(p)];
+  if (!p.mapsQuery) return <strong>{p.name || fallback}</strong>;
+  return (
+    <span className="tk-place-wrap">
+      <a className="tk-place" href={mapsSearch(p.mapsQuery)} target="_blank" rel="noopener noreferrer" title="Open in Google Maps">
+        {p.name || fallback || p.mapsQuery}
+      </a>
+      {check?.status === 'found' && (
+        <span className="tk-verify ok" title={`Found on OpenStreetMap: ${check.matched}${check.where ? `, ${check.where}` : ''}`}>
+          <span className="material-symbols-outlined" aria-hidden="true">verified</span>
+          <span className="sr-only">Found on the map</span>
+        </span>
+      )}
+      {check?.status === 'notfound' && (
+        <span className="tk-verify warn" title="Not found on OpenStreetMap in that town. It may still exist: check Google Maps or call before you go.">
+          <span className="material-symbols-outlined" aria-hidden="true">help</span>Not on map
+        </span>
+      )}
+    </span>
   );
+};
+
+/** Summary of the map check, with progress while it runs. */
+function MapCheckCard({ trip, progress, onRecheck }: { trip: SavedTrip; progress: { done: number; total: number } | null; onRecheck: () => void }) {
+  const c = trip.checks;
+  const places = placesIn(trip.plan);
+  if (!places.length && !progress) return null;
+  const found = places.filter((p) => c?.places[placeKey(p)]?.status === 'found').length;
+  const missing = places.filter((p) => c?.places[placeKey(p)]?.status === 'notfound').length;
+  const unchecked = places.filter((p) => c?.places[placeKey(p)]?.status === 'unchecked').length;
+  // Vague entries ("Check-in and unwind") are skipped, so they don't count either way.
+  const checked = found + missing;
+  const legs = Object.values(c?.legs || {}).filter(Boolean).length;
+  return (
+    <div className="card tk-card tk-mapcheck">
+      <h3 className="tk-h3"><span className="material-symbols-outlined" aria-hidden="true">fact_check</span>Map Check</h3>
+      {progress ? (
+        <>
+          <div className="tk-loading"><span className="spinner tk-spinner" />Checking places and road distances on the map… {progress.done} of {progress.total}</div>
+          <div className="tk-progress"><i style={{ width: `${progress.total ? (progress.done / progress.total) * 100 : 0}%` }} /></div>
+        </>
+      ) : c ? (
+        <>
+          <p>
+            <strong className="tk-ok-text">{found} of {checked}</strong> named places found on OpenStreetMap
+            {missing > 0 && <>; <strong className="tk-warn-text">{missing}</strong> marked "Not on map". Those may still exist (small places are often missing from the map), so check them in Google Maps first.</>}
+            {missing === 0 && '.'}
+          </p>
+          {unchecked > 0 && <p className="tk-small tk-warn-text">{unchecked} couldn't be checked because the map service was busy. Tap Check again in a minute.</p>}
+          {legs > 0 && <p className="tk-small">Drives below show the real road distance and pure driving time from {c.routeSource || 'the map'}, without stops or traffic.</p>}
+          <button className="btn-secondary tk-link-btn" onClick={onRecheck}>Check again</button>
+        </>
+      ) : (
+        <>
+          <p className="tk-dim">Check every place and drive in this plan against real map data.</p>
+          <button className="btn-secondary tk-link-btn" onClick={onRecheck}>Check places on the map</button>
+        </>
+      )}
+    </div>
+  );
+}
 
 const chipKind = (type?: string) => {
   const s = String(type || '').toLowerCase();
@@ -284,6 +345,7 @@ export function fromTripKit(t: any): SavedTrip {
 
 function RoadTripCard({ rt, maxDrive }: { rt: RoadTrip; maxDrive?: string }) {
   const limit = parseFloat(maxDrive || '') || null;
+  const checks = useContext(ChecksContext);
   return (
     <div className="card tk-card">
       <h3 className="tk-h3"><span className="material-symbols-outlined" aria-hidden="true">directions_car</span>Road Trip</h3>
@@ -318,7 +380,9 @@ function RoadTripCard({ rt, maxDrive }: { rt: RoadTrip; maxDrive?: string }) {
 
       {arr(rt.legs).map((leg, i) => {
         const stops = arr(leg.stops);
-        const hours = driveHours(leg.driveTime);
+        const real = checks?.legs[String(i)] || null;
+        // Real driving time when the map has it; otherwise the plan's own estimate.
+        const hours = real ? real.hours : driveHours(leg.driveTime);
         const over = limit && hours && hours > limit;
         return (
           <div key={i} className="tk-leg">
@@ -328,7 +392,14 @@ function RoadTripCard({ rt, maxDrive }: { rt: RoadTrip; maxDrive?: string }) {
               <span className="tk-mono tk-dim">{[leg.distanceKm ? `${leg.distanceKm} km` : '', leg.driveTime].filter(Boolean).join(' · ')}</span>
               {over && <span className="tk-chip warn">Over your {limit}-hour limit</span>}
             </div>
-            {over && <div className="tk-notice">This drive is about {hours} hours. Split it with an overnight stop on the way, or add a day to the trip.</div>}
+            {real && (
+              <div className="tk-roadcheck">
+                <span className="material-symbols-outlined" aria-hidden="true">route</span>
+                Map: <strong className="tk-mono">{real.km} km · {fmtHours(real.hours)} driving</strong>
+                <span className="tk-dim">({real.source}, without stops or traffic)</span>
+              </div>
+            )}
+            {over && <div className="tk-notice">This drive is about {fmtHours(hours!)} {real ? 'of pure driving' : ''}. Split it with an overnight stop on the way, or add a day to the trip.</div>}
             {leg.route && <div className="tk-dim">Route: {leg.route}</div>}
             {stops.length > 0 && (
               <ol className="tk-stops">
@@ -496,13 +567,22 @@ export function PackingCard({
   );
 }
 
-export function PlanView({ trip, packingSlot }: { trip: SavedTrip; packingSlot: React.ReactNode }) {
+export function PlanView({
+  trip, packingSlot, checkProgress, onRecheck,
+}: {
+  trip: SavedTrip;
+  packingSlot: React.ReactNode;
+  checkProgress: { done: number; total: number } | null;
+  onRecheck: () => void;
+}) {
   const p = trip.plan;
   const total = arr(p.budget).reduce((s, b) => s + (Number(b.amountInr) || 0), 0);
   const stay = p.accommodation;
   return (
+    <ChecksContext.Provider value={trip.checks || null}>
     <div className="results-grid">
       <div className="itinerary-list">
+        <MapCheckCard trip={trip} progress={checkProgress} onRecheck={onRecheck} />
         {(p.weather || arr(p.alerts).length > 0) && (
           <div className="card tk-card">
             <h3 className="tk-h3"><span className="material-symbols-outlined" aria-hidden="true">partly_cloudy_day</span>Weather & Alerts</h3>
@@ -581,6 +661,7 @@ export function PlanView({ trip, packingSlot }: { trip: SavedTrip; packingSlot: 
         <p className="tk-dim tk-small">Costs are estimates. Check rules and timings on the official sites before booking.</p>
       </aside>
     </div>
+    </ChecksContext.Provider>
   );
 }
 

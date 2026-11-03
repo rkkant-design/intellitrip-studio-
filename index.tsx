@@ -12,6 +12,7 @@ import {
   BookByCard, LeaveCard, PackingCard, PENDING_KEY, PlanView, STORAGE_KEY, TravellersCard,
   emptyForm, fromTripKit, loadProfile, mmss, normaliseSaved, saveProfile, startJob, store, waitForJob, arr, endDateOf,
 } from './tripkit';
+import { checkPlan, placesIn } from './placecheck';
 import { initializeApp } from 'firebase/app';
 import {
   getAuth,
@@ -357,6 +358,8 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
   const [toast, setToast] = useState<string | null>(null);
   const [packBusy, setPackBusy] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [checking, setChecking] = useState<{ tripId: string; done: number; total: number } | null>(null);
+  const checkingRef = useRef<string | null>(null);
   const importRef = useRef<HTMLInputElement>(null);
 
   const showToast = useCallback((message: string) => {
@@ -391,6 +394,40 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
     });
     setTrip((cur) => (cur && cur.id === t.id ? t : cur));
   }, [persistArchives]);
+
+  // Changes some fields of a saved trip, starting from its latest saved version.
+  const patchTrip = useCallback((id: string, patch: Partial<SavedTrip>) => {
+    setArchives((prev) => {
+      const current = prev.find((x) => x.id === id);
+      if (!current) return prev;
+      const next = prev.map((x) => (x.id === id ? { ...current, ...patch } : x));
+      return persistArchives(next) ?? prev;
+    });
+    setTrip((cur) => (cur && cur.id === id ? { ...cur, ...patch } : cur));
+  }, [persistArchives]);
+
+  // Checks the trip's places and drives against real map data, once at a time.
+  const runChecks = useCallback(async (t: SavedTrip) => {
+    if (checkingRef.current) return;
+    checkingRef.current = t.id;
+    setChecking({ tripId: t.id, done: 0, total: 0 });
+    try {
+      const checks = await checkPlan(t.plan, t.form.fromLocation, t.form.destination,
+        (done, total) => setChecking({ tripId: t.id, done, total }));
+      patchTrip(t.id, { checks });
+    } catch (err) {
+      console.error('Map check failed:', err);
+      showToast("Couldn't reach the map service. Try Check again later.");
+    } finally {
+      checkingRef.current = null;
+      setChecking(null);
+    }
+  }, [patchTrip, showToast]);
+
+  // Any open trip that has places but no map check yet gets one.
+  useEffect(() => {
+    if (trip && !trip.checks && placesIn(trip.plan).length && !checkingRef.current) runChecks(trip);
+  }, [trip, runChecks]);
 
   // Follow a plan job until it's ready. Survives tab switches and page reloads via localStorage.
   useEffect(() => {
@@ -672,6 +709,8 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
 
                 <PlanView
                   trip={trip}
+                  checkProgress={checking && checking.tripId === trip.id ? checking : null}
+                  onRecheck={() => runChecks(trip)}
                   packingSlot={<PackingCard trip={trip} onChange={upsertTrip} makeList={() => makePackingList(trip)} busy={packBusy} />}
                 />
               </div>
