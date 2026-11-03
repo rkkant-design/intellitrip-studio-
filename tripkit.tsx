@@ -9,7 +9,7 @@
  */
 
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { type Checks, placeKey, placesIn } from './placecheck';
+import { type Checks, placeKey, placesIn, routeStops } from './placecheck';
 
 // Map-check results for the trip on screen, so every place name can show its badge.
 const ChecksContext = createContext<Checks | null>(null);
@@ -418,7 +418,7 @@ function RoadTripCard({ rt, maxDrive }: { rt: RoadTrip; maxDrive?: string }) {
             )}
             {leg.from && leg.to && (
               <a className="btn-secondary tk-link-btn" target="_blank" rel="noopener noreferrer"
-                href={mapsDir(leg.from, leg.to, stops.slice(0, 8).map((s) => s.mapsQuery || s.name || '').filter(Boolean))}>
+                href={mapsDir(leg.from, leg.to, routeStops(stops, checks).slice(0, 8).map((s) => s.mapsQuery || s.name || ''))}>
                 Open this drive in Google Maps
               </a>
             )}

@@ -13,6 +13,7 @@ import {
   emptyForm, fromTripKit, loadProfile, mmss, normaliseSaved, saveProfile, startJob, store, waitForJob, arr, endDateOf,
 } from './tripkit';
 import { checkPlan, placesIn } from './placecheck';
+import { ShareSheet } from './share';
 import { initializeApp } from 'firebase/app';
 import {
   getAuth,
@@ -359,6 +360,7 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
   const [packBusy, setPackBusy] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [checking, setChecking] = useState<{ tripId: string; done: number; total: number } | null>(null);
+  const [sharing, setSharing] = useState(false);
   const checkingRef = useRef<string | null>(null);
   const importRef = useRef<HTMLInputElement>(null);
 
@@ -694,6 +696,9 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
                     <span className="tk-saved" title="Saved in Archives on this device">
                       <span className="material-symbols-outlined" aria-hidden="true">check_circle</span>Saved
                     </span>
+                    <button onClick={() => setSharing(true)} className="btn-secondary tk-share-btn">
+                      <span className="material-symbols-outlined" aria-hidden="true">share</span>Share
+                    </button>
                     <button onClick={() => { setIsTripCommenced(true); setActiveTab('radar'); }} className="btn-accent">Commence Journey</button>
                     <button onClick={() => { setTrip(null); setForm(emptyForm(profile)); }} className="btn-icon-bg" aria-label="Close itinerary">
                       <span className="material-symbols-outlined" aria-hidden="true">close</span>
@@ -818,6 +823,7 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
         )}
       </main>
 
+      {sharing && trip && <ShareSheet trip={trip} onClose={() => setSharing(false)} />}
       {toast && <Toast message={toast} />}
     </div>
   );

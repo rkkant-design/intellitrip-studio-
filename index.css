@@ -471,3 +471,20 @@ a.tk-place.tk-place { display: inline; }
 .tk-ok-text { color: var(--success); }
 .tk-warn-text { color: var(--accent); }
 .tk-mapcheck { border-color: rgba(63, 185, 80, 0.35); }
+
+/* --- Share with family --- */
+.tk-share-btn, .tk-wa { display: inline-flex; align-items: center; gap: 0.35rem; text-decoration: none; }
+.tk-share-btn .material-symbols-outlined, .tk-wa .material-symbols-outlined { font-size: 1.1rem; }
+.tk-wa { background: #25d366; color: #062b14; }
+.tk-modal-bg { position: fixed; inset: 0; z-index: 900; background: rgba(1, 4, 9, 0.7); display: flex; align-items: center; justify-content: center; padding: 1rem; }
+.tk-modal { width: 100%; max-width: 640px; max-height: 92vh; overflow-y: auto; display: flex; flex-direction: column; gap: 1rem; padding: 1.5rem; }
+.tk-modal-head { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+.tk-modal .field { margin-bottom: 0; }
+.tk-grow { flex: 1; min-width: 12rem; }
+.tk-share-links { padding-top: 1.4rem; }
+.tk-share-text { width: 100%; min-height: 18rem; font-size: 0.85rem; line-height: 1.5; resize: vertical; }
+@media (max-width: 800px) {
+  .tk-modal-bg { align-items: flex-end; padding: 0; }
+  .tk-modal { max-height: 94vh; border-radius: 14px 14px 0 0; padding: 1.1rem 1rem calc(1.1rem + env(safe-area-inset-bottom, 0px)); }
+  .tk-share-text { min-height: 14rem; }
+}

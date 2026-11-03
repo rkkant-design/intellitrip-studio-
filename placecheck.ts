@@ -148,6 +148,8 @@ async function getJson(url: string) {
 // Towns must lie roughly between the start and the destination. Free geocoders
 // "correct" small town names to far-away places (Peerumedu became Peelamedu, Coimbatore).
 let inCorridor: (p: Point) => boolean = () => true;
+// Places (not towns) must sit close to the trip itself.
+let nearRoute: (p: Point) => boolean = () => true;
 
 const nameLike = (query: string, got: string) => tokens(query).some((a) => tokens(got).some((b) => sameWord(a, b)));
 
@@ -155,8 +157,10 @@ interface Point { lat: number; lon: number; name?: string }
 
 const townCache = new Map<string, Point | null>();
 
-// Plans sometimes write towns as "Tiruchirappalli (Trichy) — stay near the bypass": keep the town itself.
-const townOnly = (name: string) => name.split(/[,(/—–]| - /)[0].trim();
+// Plans sometimes write towns as "Tiruchirappalli (Trichy) — stay near the bypass" or "Kumily Junction":
+// keep the town itself.
+const townOnly = (name: string) =>
+  name.split(/[,(/—–]| - /)[0].replace(/\b(junction|jn|bypass|road|bus stand|town|city|centre|center)\b\.?/gi, ' ').replace(/\s+/g, ' ').trim();
 
 /** Coordinates of a town or city, from Open-Meteo's geocoder, then OpenStreetMap. */
 export async function findTown(name: string): Promise<Point | null> {
@@ -192,7 +196,12 @@ async function findPlace(p: Place, kind: Kind, region: Point | null, ignore: str
 
   const townPoint = town ? await findTown(town) : null;
   const anchor = townPoint || region;
-  const maxKm = townPoint ? 30 : 150;
+  // A single short word ("Arya") is a weak name, so it has to be right next to the town.
+  const weakName = wanted.length === 1 && wanted[0].length < 5;
+  const maxKm = townPoint ? (weakName ? 10 : 30) : Infinity;
+  // When the town couldn't be placed (spellings differ: Peerumedu / Peermade), a match must lie near the
+  // route instead, and a weak name must also have the town in its address.
+  const townWords = town && !townPoint && weakName ? distinctiveWords(townOnly(town)) : [];
   // Last try: just the distinctive name near the right area, for when a town in the query pulls up roads instead.
   const queries = [p.mapsQuery, town ? `${wanted.join(' ')} ${town}` : '', wanted.join(' ')]
     .filter((q, i, all): q is string => Boolean(q) && all.indexOf(q) === i);
@@ -210,6 +219,11 @@ async function findPlace(p: Place, kind: Kind, region: Point | null, ignore: str
       if (!kindFits(kind, String(props.osm_key || ''), String(props.osm_value || ''))) continue;
       const point = { lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0] };
       if (anchor && km(anchor, point) > maxKm) continue;
+      if (!townPoint && !nearRoute(point)) continue;
+      if (townWords.length) {
+        const address = [props.city, props.town, props.village, props.district, props.county, props.locality].filter(Boolean).join(' ');
+        if (!townWords.some((w) => tokens(address).some((a) => sameWord(w, a)))) continue;
+      }
       return {
         status: 'found', ...point, matched: cand,
         where: [props.city || props.town || props.village || props.county, props.state].filter(Boolean).join(', '),
@@ -234,6 +248,14 @@ async function routeThrough(points: Point[]): Promise<LegCheck | null> {
 }
 
 const arr = <T,>(x: T[] | undefined | null): T[] => (Array.isArray(x) ? x : []);
+
+// Plan entries that aren't one particular place ("Fuel top-up (optional)", "BPCL/HPCL pumps on NH183").
+const PLACEHOLDER = /\b(optional|top-?up|any|pumps|stalls?|section|on nh\s?\d+)\b/i;
+
+/** The stops worth sending to Google Maps as route waypoints: no vague entries or placeholders. */
+export function routeStops<T extends Place>(stops: T[] | undefined, checks?: Checks | null): T[] {
+  return arr(stops).filter((s) => s.name && !PLACEHOLDER.test(`${s.name} ${s.mapsQuery || ''}`) && checks?.places[placeKey(s)]?.status !== 'skipped');
+}
 
 const looksLikeFood = (s?: string) => /\bfood\b/i.test(s || '');
 
@@ -269,11 +291,13 @@ export async function checkPlan(
   stats.answered = 0;
   townCache.clear();
   inCorridor = () => true;
+  nearRoute = () => true;
   const fromPt = await findTown(from);
   const destPt = await findTown(destination);
   if (fromPt && destPt) {
     const span = km(fromPt, destPt);
     inCorridor = (p) => km(fromPt, p) + km(p, destPt) <= span * 1.5 + 80;
+    nearRoute = (p) => km(fromPt, p) + km(p, destPt) <= span * 1.2 + 30;
   }
   const region = destPt || fromPt;
   const ignore = [townOnly(from), townOnly(destination)];
@@ -302,7 +326,7 @@ export async function checkPlan(
       .map((s) => results[placeKey(s)])
       .filter((c): c is PlaceCheck => c?.status === 'found' && c.lat !== undefined)
       .map((c) => ({ lat: c.lat!, lon: c.lon! }))
-      .filter((pt) => km(start, pt) + km(pt, end) <= direct * 1.4 + 25);
+      .filter((pt) => km(start, pt) + km(pt, end) <= direct * 1.25 + 20);
     legChecks[String(i)] = await routeThrough([start, ...via, end]);
     tick();
   }
