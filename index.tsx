@@ -7,6 +7,11 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
+import {
+  type FormState, type Profile, type SavedTrip, type Packing, type Plan,
+  BookByCard, LeaveCard, PackingCard, PENDING_KEY, PlanView, STORAGE_KEY, TravellersCard,
+  emptyForm, fromTripKit, loadProfile, mmss, normaliseSaved, saveProfile, startJob, store, waitForJob, arr, endDateOf,
+} from './tripkit';
 import { initializeApp } from 'firebase/app';
 import {
   getAuth,
@@ -50,106 +55,35 @@ interface AppUser {
 
 // --- TYPES ---
 
-type TravelType = 'Family' | 'Solo' | 'Group' | 'Luxury' | 'Adventure' | 'Romantic';
-type ActiveTab = 'planner' | 'radar' | 'archives';
+type ActiveTab = 'planner' | 'radar' | 'archives' | 'toolkit';
 
-interface FormState {
-  fromLocation: string;
-  destination: string;
-  startDate: string;
-  duration: number | '';
-  adults: number;
-  children: number;
-  travelType: TravelType;
-  idealTripDescription: string;
-}
-
-interface Activity {
-  time: string;
-  name: string;
-  description: string;
-  heroMoment: string;
-}
-
-interface LiveAlert {
-  condition: 'Crowded' | 'Weather' | 'Traffic' | 'Closure';
-  description: string;
-  alternativeSuggestion: string;
-}
-
-interface Accommodation {
-  name: string;
-  type: string;
-  reason: string;
-  estimatedPricePerNight: number;
-}
-
-interface DayPlan {
-  day: number;
-  theme: string;
-  vibe?: string;
-  narrative: string;
-  localSecret: string;
-  activities: Activity[];
-  liveAlerts: LiveAlert[];
-}
-
-interface CostBreakdown {
-  totalAccommodation: number;
-  totalFood: number;
-  totalMisc: number;
-}
-
-interface ItineraryResults {
-  tripTitle: string;
-  tripSummary: string;
-  overallTripTotalCost: number;
-  accommodationRecommendation: Accommodation;
-  costBreakdown: CostBreakdown;
-  dailyItinerary: DayPlan[];
-}
-
-interface SavedTrip {
-  id: string;
-  results: ItineraryResults;
+interface PendingPlan {
+  jobId: string;
   form: FormState;
-  vibeImage: string | null;
-  dateCreated: string;
+  startedAt: number;
 }
 
 // --- UTILITIES ---
 
-const STORAGE_KEY = 'intellitrip_v5_saved';
-
-const formatINR = (n: number | undefined | null): string =>
-  `₹${Number(n ?? 0).toLocaleString('en-IN')}`;
-
 const loadArchives = (): SavedTrip[] => {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (!saved) return [];
-    const parsed = JSON.parse(saved);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch (e) {
-    console.warn('Could not read archives from storage; starting fresh.', e);
-    return [];
-  }
+  const raw = store.get<unknown[]>(STORAGE_KEY, []);
+  return (Array.isArray(raw) ? raw : []).map(normaliseSaved).filter((t): t is SavedTrip => t !== null);
 };
 
 // --- COMPONENTS ---
 
-const LoadingStage = ({ destination }: { destination: string }) => {
+const LoadingStage = ({ destination, seconds }: { destination: string; seconds: number }) => {
   const messages = [
-    'Consulting local informants...',
-    'Scanning satellite imagery...',
-    'Curating atmospheric vibes...',
-    'Optimizing logistics...',
-    'Finalizing architecture...',
+    'Mapping the best routes...',
+    'Finding food stops on the way...',
+    'Hunting for hidden gems...',
+    'Checking weather and closures...',
+    'Planning each day...',
   ];
   const [msg, setMsg] = useState(0);
 
   useEffect(() => {
-    const interval = setInterval(() => setMsg((m) => (m + 1) % messages.length), 2500);
+    const interval = setInterval(() => setMsg((m) => (m + 1) % messages.length), 4000);
     return () => clearInterval(interval);
   }, []);
 
@@ -157,7 +91,8 @@ const LoadingStage = ({ destination }: { destination: string }) => {
     <div className="loading-container" role="status" aria-live="polite">
       <div className="spinner" aria-hidden="true"></div>
       <h3>{messages[msg]}</h3>
-      <p>Building your journey to {destination}</p>
+      <p>Building your journey to {destination} · <span className="tk-mono">{mmss(seconds)}</span></p>
+      <p className="tk-dim tk-small">Usually 2–5 minutes. You can switch tabs or close this page: the trip is saved to Archives when it's ready.</p>
     </div>
   );
 };
@@ -411,33 +346,83 @@ const TrafficMap = ({ destination }: { destination: string }) => {
 
 const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, onLogout }) => {
   const [activeTab, setActiveTab] = useState<ActiveTab>('planner');
-  const [form, setForm] = useState<FormState>({
-    fromLocation: '',
-    destination: '',
-    startDate: '',
-    duration: 3,
-    adults: 2,
-    children: 0,
-    travelType: 'Family',
-    idealTripDescription: '',
-  });
-
-  const [loading, setLoading] = useState(false);
-  const [results, setResults] = useState<ItineraryResults | null>(null);
-  const [vibeImage, setVibeImage] = useState<string | null>(null);
+  const [profile, setProfile] = useState<Profile>(loadProfile);
+  const [form, setForm] = useState<FormState>(() => emptyForm(loadProfile()));
+  const [pending, setPending] = useState<PendingPlan | null>(() => store.get<PendingPlan | null>(PENDING_KEY, null));
+  const [seconds, setSeconds] = useState(0);
+  const [trip, setTrip] = useState<SavedTrip | null>(null);
   const [isTripCommenced, setIsTripCommenced] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [archives, setArchives] = useState<SavedTrip[]>([]);
+  const [archives, setArchives] = useState<SavedTrip[]>(loadArchives);
   const [toast, setToast] = useState<string | null>(null);
-
-  useEffect(() => {
-    setArchives(loadArchives());
-  }, []);
+  const [packBusy, setPackBusy] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const importRef = useRef<HTMLInputElement>(null);
 
   const showToast = useCallback((message: string) => {
     setToast(message);
     setTimeout(() => setToast(null), 2800);
   }, []);
+
+  const getHeaders = useCallback(async () => {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (user.getToken) {
+      const token = await user.getToken();
+      if (token) headers.Authorization = `Bearer ${token}`;
+    }
+    return headers;
+  }, [user]);
+
+  const persistArchives = useCallback((updated: SavedTrip[]) => {
+    // Base64 hero images from older trips are large; if we hit the storage quota,
+    // retry without them rather than losing the save entirely.
+    if (store.set(STORAGE_KEY, updated)) return updated;
+    const lean = updated.map((t) => ({ ...t, vibeImage: null }));
+    if (store.set(STORAGE_KEY, lean)) return lean;
+    showToast('Storage is full. Delete an old trip from Archives and try again.');
+    return null;
+  }, [showToast]);
+
+  // Saves a new or changed trip and keeps the open trip in sync.
+  const upsertTrip = useCallback((t: SavedTrip) => {
+    setArchives((prev) => {
+      const next = [t, ...prev.filter((x) => x.id !== t.id)];
+      return persistArchives(next) ?? prev;
+    });
+    setTrip((cur) => (cur && cur.id === t.id ? t : cur));
+  }, [persistArchives]);
+
+  // Follow a plan job until it's ready. Survives tab switches and page reloads via localStorage.
+  useEffect(() => {
+    if (!pending) return;
+    let cancelled = false;
+    const tick = () => setSeconds(Math.round((Date.now() - pending.startedAt) / 1000));
+    tick();
+    const timer = setInterval(tick, 1000);
+    waitForJob<Plan>(pending.jobId, getHeaders, pending.startedAt, undefined, () => cancelled)
+      .then((plan) => {
+        if (cancelled) return;
+        const saved: SavedTrip = {
+          id: Date.now().toString(), form: pending.form, plan, packing: null, packed: {},
+          dateCreated: new Date().toLocaleDateString(),
+        };
+        upsertTrip(saved);
+        setTrip(saved);
+        setActiveTab('planner');
+        showToast('Your trip is ready and saved to Archives.');
+      })
+      .catch((err: Error) => {
+        if (cancelled || err.message === 'cancelled') return;
+        setError(err.message);
+        setForm(pending.form);
+      })
+      .finally(() => {
+        if (cancelled) return;
+        store.set(PENDING_KEY, null);
+        setPending(null);
+      });
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [pending, getHeaders, upsertTrip, showToast]);
 
   const handleInputChange = (
     e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>
@@ -449,95 +434,77 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
   const generateItinerary = async () => {
     const duration = Number(form.duration);
     if (!form.destination.trim() || !form.fromLocation.trim() || !form.startDate) {
-      setError('Please fill in Origin, Destination, and Date.');
+      setError('Please fill in From, To and Start date.');
       return;
     }
     if (!duration || duration < 1) {
       setError('Please enter at least 1 night.');
       return;
     }
-
-    setLoading(true);
     setError(null);
-    setResults(null);
-    setVibeImage(null);
+    setTrip(null);
     setIsTripCommenced(false);
-
     try {
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (user.getToken) {
-        const token = await user.getToken();
-        if (token) headers.Authorization = `Bearer ${token}`;
-      }
-      const res = await fetch('/api/generate', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(form),
-      });
-
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || 'Failed to generate. Please try again.');
-      }
-
-      const data = await res.json();
-      if (!data.itinerary) throw new Error('The curation engine returned no itinerary.');
-
-      setResults(data.itinerary as ItineraryResults);
-      setVibeImage((data.vibeImage as string | null) ?? null);
+      const jobId = await startJob('/api/plan', { ...form, profile }, await getHeaders());
+      const next: PendingPlan = { jobId, form, startedAt: Date.now() };
+      store.set(PENDING_KEY, next);
+      setPending(next);
     } catch (err: any) {
-      setError(err?.message || 'Failed to generate. Please try again.');
-    } finally {
-      setLoading(false);
+      setError(err?.message || 'Failed to start. Please try again.');
     }
   };
 
-  const persistArchives = (updated: SavedTrip[]) => {
-    // Base64 hero images are large; if we hit the storage quota, retry without
-    // the images rather than losing the save entirely.
+  const makePackingList = async (t: SavedTrip) => {
+    setPackBusy('Starting…');
+    const startedAt = Date.now();
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-      return true;
-    } catch {
-      try {
-        const lean = updated.map((t) => ({ ...t, vibeImage: null }));
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(lean));
-        setArchives(lean);
-        showToast('Trip archived (image omitted to save space).');
-        return true;
-      } catch {
-        showToast('Storage is full — could not archive this trip.');
-        return false;
-      }
+      const planSummary = [t.plan.summary, t.plan.weather].filter(Boolean).join(' ');
+      const jobId = await startJob('/api/pack', { ...t.form, profile, planSummary }, await getHeaders());
+      const packing = await waitForJob<Packing>(jobId, getHeaders, startedAt, (s) => setPackBusy(`Building your list… ${mmss(s)}`));
+      upsertTrip({ ...t, packing: { groups: arr(packing?.groups) }, packed: {} });
+    } catch (err: any) {
+      showToast(err?.message || 'Could not make the packing list.');
+    } finally {
+      setPackBusy(null);
     }
   };
 
-  const saveTrip = () => {
-    if (!results) return;
-    const newEntry: SavedTrip = {
-      id: Date.now().toString(),
-      results,
-      form,
-      vibeImage,
-      dateCreated: new Date().toLocaleDateString(),
-    };
-    const updated = [newEntry, ...archives];
-    if (persistArchives(updated)) {
-      setArchives(updated);
-      showToast('Trip archived successfully.');
-    }
-  };
-
-  const openArchived = (trip: SavedTrip) => {
-    setResults(trip.results);
-    setForm(trip.form);
-    setVibeImage(trip.vibeImage);
+  const openArchived = (t: SavedTrip) => {
+    setTrip(t);
+    setForm(t.form);
     setIsTripCommenced(false);
     setActiveTab('planner');
   };
 
-  const cost = results?.costBreakdown;
-  const stay = results?.accommodationRecommendation;
+  const deleteArchived = (id: string) => {
+    const next = archives.filter((t) => t.id !== id);
+    const saved = persistArchives(next);
+    if (saved) setArchives(saved);
+    if (trip?.id === id) setTrip(null);
+    setConfirmDelete(null);
+    showToast('Trip deleted.');
+  };
+
+  // Brings in trips saved by the laptop Trip Kit app (data/trips/*.json).
+  const importTripKit = async (files: FileList | null) => {
+    if (!files?.length) return;
+    let added = 0;
+    const failed: string[] = [];
+    for (const file of Array.from(files)) {
+      try {
+        const t = fromTripKit(JSON.parse(await file.text()));
+        if (archives.some((a) => a.id === t.id)) continue;
+        upsertTrip(t);
+        added++;
+      } catch {
+        failed.push(file.name);
+      }
+    }
+    showToast(failed.length ? `Imported ${added}. Couldn't read: ${failed.join(', ')}` : `Imported ${added} trip${added === 1 ? '' : 's'}.`);
+    if (importRef.current) importRef.current.value = '';
+  };
+
+  const destination = trip?.form.destination || form.destination;
 
   return (
     <div className="app-container">
@@ -582,22 +549,29 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
         >
           Archives
         </button>
+        <button
+          className={activeTab === 'toolkit' ? 'active' : ''}
+          onClick={() => setActiveTab('toolkit')}
+          aria-current={activeTab === 'toolkit'}
+        >
+          Toolkit
+        </button>
       </nav>
 
       <main className="content">
         {activeTab === 'planner' && (
           <>
-            {!results && !loading && (
+            {!trip && !pending && (
               <div className="card form-card animate-fade-in">
                 <h2>Plan New Adventure</h2>
                 <div className="grid-2">
                   <div className="field">
                     <label htmlFor="fromLocation">From</label>
-                    <input id="fromLocation" name="fromLocation" value={form.fromLocation} onChange={handleInputChange} placeholder="e.g. Mumbai" />
+                    <input id="fromLocation" name="fromLocation" value={form.fromLocation} onChange={handleInputChange} placeholder="e.g. Madurai" />
                   </div>
                   <div className="field">
                     <label htmlFor="destination">To</label>
-                    <input id="destination" name="destination" value={form.destination} onChange={handleInputChange} placeholder="e.g. Kyoto" />
+                    <input id="destination" name="destination" value={form.destination} onChange={handleInputChange} placeholder="e.g. Vagamon" />
                   </div>
                 </div>
                 <div className="grid-2">
@@ -631,95 +605,75 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
                     </select>
                   </div>
                 </div>
+                <div className="grid-3">
+                  <div className="field">
+                    <label htmlFor="mode">How you're travelling</label>
+                    <select id="mode" name="mode" value={form.mode} onChange={handleInputChange}>
+                      <option>Road trip in our own car</option>
+                      <option>Road trip with a hired cab and driver</option>
+                      <option>Compare road, train and flight</option>
+                    </select>
+                  </div>
+                  <div className="field">
+                    <label htmlFor="maxDrive">Most driving a day</label>
+                    <select id="maxDrive" name="maxDrive" value={form.maxDrive} onChange={handleInputChange}>
+                      {['3 hours', '5 hours', '7 hours', '9 hours'].map((o) => <option key={o}>{o}</option>)}
+                    </select>
+                  </div>
+                  <div className="field">
+                    <label htmlFor="budget">Budget</label>
+                    <select id="budget" name="budget" value={form.budget} onChange={handleInputChange}>
+                      {['Budget', 'Mid-range', 'Comfortable', 'Splurge'].map((o) => <option key={o}>{o}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <div className="field">
+                  <label htmlFor="food">Food preference</label>
+                  <input id="food" name="food" value={form.food} onChange={handleInputChange} placeholder="e.g. South Indian vegetarian" />
+                </div>
                 <div className="field">
                   <label htmlFor="idealTripDescription">Describe your ideal experience</label>
-                  <textarea id="idealTripDescription" name="idealTripDescription" value={form.idealTripDescription} onChange={handleInputChange} placeholder="e.g. Wheelchair accessible, slow-paced, great street food..." />
+                  <textarea id="idealTripDescription" name="idealTripDescription" value={form.idealTripDescription} onChange={handleInputChange} placeholder="e.g. Quiet viewpoints, good local food on the way, elderly parent, avoid long walks..." />
                 </div>
                 {error && <p className="error" role="alert">{error}</p>}
                 <button className="btn-primary" onClick={generateItinerary}>Curate Journey</button>
+                <p className="tk-dim tk-small tk-center">Your travellers and car from the Toolkit tab are used automatically.</p>
               </div>
             )}
 
-            {loading && <LoadingStage destination={form.destination} />}
+            {pending && !trip && <LoadingStage destination={pending.form.destination} seconds={seconds} />}
 
-            {results && (
+            {trip && (
               <div className="results-container animate-fade-in">
                 <div className="results-header">
                   <div className="title-group">
-                    <h2>{results.tripTitle}</h2>
-                    <p>{results.tripSummary}</p>
+                    <h2>{trip.plan.title || trip.form.destination}</h2>
+                    <p className="tk-route">
+                      {trip.form.fromLocation} → {trip.form.destination} · {fmtTripDates(trip.form)} · {trip.form.adults} adults{Number(trip.form.children) ? `, ${trip.form.children} children` : ''}
+                    </p>
+                    <p>{trip.plan.summary}</p>
                   </div>
                   <div className="action-btns">
-                    <button onClick={saveTrip} className="btn-secondary">Archive</button>
+                    <span className="tk-saved" title="Saved in Archives on this device">
+                      <span className="material-symbols-outlined" aria-hidden="true">check_circle</span>Saved
+                    </span>
                     <button onClick={() => { setIsTripCommenced(true); setActiveTab('radar'); }} className="btn-accent">Commence Journey</button>
-                    <button onClick={() => { setResults(null); setVibeImage(null); }} className="btn-icon-bg" aria-label="Close itinerary">
+                    <button onClick={() => { setTrip(null); setForm(emptyForm(profile)); }} className="btn-icon-bg" aria-label="Close itinerary">
                       <span className="material-symbols-outlined" aria-hidden="true">close</span>
                     </button>
                   </div>
                 </div>
 
-                {vibeImage && (
+                {trip.vibeImage && (
                   <div className="results-vibe-hero card animate-fade-in">
-                    <img src={vibeImage} alt={`Scenery of ${form.destination}`} />
+                    <img src={trip.vibeImage} alt={`Scenery of ${trip.form.destination}`} />
                   </div>
                 )}
 
-                <div className="results-grid">
-                  <div className="itinerary-list">
-                    {results.dailyItinerary?.map((day) => (
-                      <div key={day.day} className="day-card card">
-                        <div className="day-head">
-                          <span className="day-num">Day {day.day}</span>
-                          <h3>{day.theme}</h3>
-                        </div>
-                        <p className="day-narrative">{day.narrative}</p>
-                        {day.localSecret && (
-                          <div className="local-secret">
-                            <span className="material-symbols-outlined" aria-hidden="true">vpn_key</span>
-                            <div>
-                              <strong>Local Secret:</strong> {day.localSecret}
-                            </div>
-                          </div>
-                        )}
-                        <div className="activities">
-                          {day.activities?.map((act, i) => (
-                            <div key={i} className="activity-item">
-                              <span className="act-time">{act.time}</span>
-                              <div className="act-info">
-                                <strong>{act.name}</strong>
-                                <p>{act.description}</p>
-                                {act.heroMoment && (
-                                  <span className="hero-moment">✨ Hero Moment: {act.heroMoment}</span>
-                                )}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
-                  <aside className="summary-sidebar">
-                    {stay && (
-                      <div className="card info-card">
-                        <h3>Stay Recommendation</h3>
-                        <div className="stay-info">
-                          <strong>{stay.name}</strong>
-                          <span className="tag">{stay.type}</span>
-                          <p>{stay.reason}</p>
-                          <div className="cost-line">Est. {formatINR(stay.estimatedPricePerNight)}/night</div>
-                        </div>
-                      </div>
-                    )}
-                    <div className="card budget-card">
-                      <h3>Investment Summary</h3>
-                      <div className="budget-item"><span>Stays</span> <strong>{formatINR(cost?.totalAccommodation)}</strong></div>
-                      <div className="budget-item"><span>Food</span> <strong>{formatINR(cost?.totalFood)}</strong></div>
-                      <div className="budget-item"><span>Misc</span> <strong>{formatINR(cost?.totalMisc)}</strong></div>
-                      <div className="total-line"><span>Total</span> <strong>{formatINR(results.overallTripTotalCost)}</strong></div>
-                    </div>
-                  </aside>
-                </div>
+                <PlanView
+                  trip={trip}
+                  packingSlot={<PackingCard trip={trip} onChange={upsertTrip} makeList={() => makePackingList(trip)} busy={packBusy} />}
+                />
               </div>
             )}
           </>
@@ -729,20 +683,20 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
           <div className="radar-view animate-fade-in">
             <div className="radar-head">
               <h2>Trip Environmental Briefing</h2>
-              <p>Curated context for <strong>{form.destination}</strong></p>
+              <p>Curated context for <strong>{destination}</strong></p>
             </div>
 
-            <WeatherTracker destination={form.destination} />
+            <WeatherTracker destination={destination} />
 
-            <TrafficMap destination={form.destination} />
+            <TrafficMap destination={destination} />
 
             <div className="radar-grid-layout">
               <div className="alerts-feed">
-                {results?.dailyItinerary?.map((day) => (
+                {arr(trip?.plan.days).map((day) => (
                   <div key={day.day} className="radar-day-section">
                     <h4>Day {day.day} Contextual Updates</h4>
-                    {day.liveAlerts?.map((alert, idx) => (
-                      <div key={idx} className={`alert-card ${alert.condition.toLowerCase()}`}>
+                    {arr(day.liveAlerts).map((alert, idx) => (
+                      <div key={idx} className={`alert-card ${String(alert.condition || '').toLowerCase()}`}>
                         <div className="alert-title">
                           <span className="material-symbols-outlined" aria-hidden="true">
                             {alert.condition === 'Crowded'
@@ -753,7 +707,7 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
                               ? 'block'
                               : 'traffic'}
                           </span>
-                          {alert.condition} Advisory
+                          {alert.condition || 'Heads-up'} Advisory
                         </div>
                         <p>{alert.description}</p>
                         <div className="pivot">
@@ -771,11 +725,11 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
                   <div className="radar-blip b2"></div>
                 </div>
                 <div className="radar-metrics">
-                  <div className="metric"><span>Density</span><strong>Moderate</strong></div>
-                  <div className="metric"><span>Climate</span><strong>Stable</strong></div>
-                  <div className="metric"><span>Transit</span><strong>Fluent</strong></div>
+                  <div className="metric"><span>Days</span><strong>{arr(trip?.plan.days).length}</strong></div>
+                  <div className="metric"><span>Advisories</span><strong>{arr(trip?.plan.days).reduce((s, d) => s + arr(d.liveAlerts).length, 0)}</strong></div>
+                  <div className="metric"><span>Hidden gems</span><strong>{arr(trip?.plan.days).reduce((s, d) => s + arr(d.hiddenGems).length, 0)}</strong></div>
                 </div>
-                <p className="radar-note">Advisories are generated with your itinerary as planning guidance.</p>
+                <p className="radar-note">Advisories are generated with your itinerary as planning guidance. Weather and traffic above are live.</p>
               </div>
             </div>
           </div>
@@ -783,22 +737,44 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
 
         {activeTab === 'archives' && (
           <div className="archives-view animate-fade-in">
-            <h2>Your Journey Archives</h2>
+            <div className="tk-archive-head">
+              <h2>Your Journey Archives</h2>
+              <button className="btn-secondary" onClick={() => importRef.current?.click()}>Import Trip Kit trips</button>
+              <input ref={importRef} type="file" accept=".json,application/json" multiple hidden onChange={(e) => importTripKit(e.target.files)} />
+            </div>
+            <p className="tk-dim tk-small">Trips are saved in this browser. To bring in trips from the laptop Trip Kit app, pick their files from <code>C:\Users\kamal\Apps\TripKit\data\trips</code>.</p>
             {archives.length === 0 ? (
               <p className="empty-msg">No journeys preserved yet.</p>
             ) : (
               <div className="archive-list">
-                {archives.map((trip) => (
-                  <button key={trip.id} className="card archive-card" onClick={() => openArchived(trip)}>
-                    <div className="arc-info">
-                      <strong>{trip.results.tripTitle}</strong>
-                      <span>{trip.form.destination} • {trip.dateCreated}</span>
-                    </div>
-                    <span className="material-symbols-outlined" aria-hidden="true">arrow_forward</span>
-                  </button>
+                {archives.map((t) => (
+                  <div key={t.id} className="tk-archive-row">
+                    <button className="card archive-card" onClick={() => openArchived(t)}>
+                      <div className="arc-info">
+                        <strong>{t.plan.title || t.form.destination}</strong>
+                        <span>{t.form.fromLocation ? `${t.form.fromLocation} → ` : ''}{t.form.destination} • {fmtTripDates(t.form)}</span>
+                      </div>
+                      <span className="material-symbols-outlined" aria-hidden="true">arrow_forward</span>
+                    </button>
+                    {confirmDelete === t.id ? (
+                      <button className="btn-secondary tk-danger" onClick={() => deleteArchived(t.id)}>Tap again to delete</button>
+                    ) : (
+                      <button className="btn-icon-bg" aria-label={`Delete ${t.plan.title || t.form.destination}`} onClick={() => setConfirmDelete(t.id)}>
+                        <span className="material-symbols-outlined" aria-hidden="true">delete</span>
+                      </button>
+                    )}
+                  </div>
                 ))}
               </div>
             )}
+          </div>
+        )}
+
+        {activeTab === 'toolkit' && (
+          <div className="tk-toolkit animate-fade-in">
+            <TravellersCard profile={profile} onSave={(p) => { saveProfile(p); setProfile(p); showToast('Travellers saved.'); }} />
+            <BookByCard />
+            <LeaveCard />
           </div>
         )}
       </main>
@@ -806,6 +782,14 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
       {toast && <Toast message={toast} />}
     </div>
   );
+};
+
+const fmtTripDates = (f: FormState) => {
+  if (!f.startDate) return '';
+  const opts: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short' };
+  const a = new Date(f.startDate + 'T00:00:00').toLocaleDateString('en-IN', opts);
+  const b = new Date(endDateOf(f) + 'T00:00:00').toLocaleDateString('en-IN', { ...opts, year: 'numeric' });
+  return `${a} – ${b}`;
 };
 
 const LandingPage = ({ onStart }: { onStart: () => void }) => (
@@ -821,7 +805,7 @@ const LandingPage = ({ onStart }: { onStart: () => void }) => (
       <div className="feature-card card">
         <span className="material-symbols-outlined feature-icon" aria-hidden="true">auto_awesome</span>
         <h3>AI Architecture</h3>
-        <p>A Gemini-powered curation engine builds tailored, cinematic narratives for every journey.</p>
+        <p>An AI planner builds road trips with real routes, food stops on the way and a story for every day.</p>
       </div>
       <div className="feature-card card">
         <span className="material-symbols-outlined feature-icon" aria-hidden="true">radar</span>
@@ -831,12 +815,12 @@ const LandingPage = ({ onStart }: { onStart: () => void }) => (
       <div className="feature-card card">
         <span className="material-symbols-outlined feature-icon" aria-hidden="true">vpn_key</span>
         <h3>Local Secrets</h3>
-        <p>Uncover hidden gems and a "Hero Moment" for every stop, curated by the AI architect.</p>
+        <p>Lesser-known places worth the detour, and a "Hero Moment" for every stop, each one a tap away in Google Maps.</p>
       </div>
       <div className="feature-card card">
         <span className="material-symbols-outlined feature-icon" aria-hidden="true">account_balance_wallet</span>
         <h3>Budget Logic</h3>
-        <p>Precise cost breakdowns in INR, optimized for group savings and high-value stays.</p>
+        <p>Cost estimates in INR, booking deadlines, packing lists and a leave-home checklist.</p>
       </div>
     </section>
   </div>

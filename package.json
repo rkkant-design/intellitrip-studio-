@@ -7,10 +7,10 @@
     "dev": "netlify dev",
     "dev:vite": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "dev:local": "vite"
   },
   "dependencies": {
-    "@google/genai": "^1.13.0",
     "firebase": "^11.1.0",
     "jose": "^5.9.6",
     "mapbox-gl": "^3.7.0",

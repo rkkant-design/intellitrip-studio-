@@ -358,3 +358,104 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--primary); b
 .google-btn:hover { filter: brightness(0.97); }
 .google-btn:disabled { opacity: 0.7; cursor: not-allowed; }
 .google-btn svg { flex-shrink: 0; }
+
+/* --- Trip Kit merge: road trip, hidden gems, packing, toolkit --- */
+.tk-card { margin-bottom: 2rem; padding: 1.75rem; display: flex; flex-direction: column; gap: 0.9rem; }
+.tk-h3 { display: flex; align-items: center; gap: 0.5rem; color: var(--text-bright); font-size: 1rem; }
+.tk-h3 .material-symbols-outlined { color: var(--primary); }
+.tk-sub { margin-top: 0.5rem; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim); }
+.tk-dim { color: var(--text-dim); font-size: 0.85rem; }
+.tk-small { font-size: 0.85rem; }
+.tk-mono { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+.tk-center { text-align: center; margin-top: 0.75rem; }
+.tk-foot { margin-top: 0.25rem; }
+.tk-list { padding-left: 1.1rem; display: flex; flex-direction: column; gap: 0.35rem; }
+.tk-row { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; }
+.tk-ok { color: var(--success); font-size: 0.85rem; }
+.tk-route { color: var(--accent) !important; font-weight: 600; font-size: 0.9rem; margin-bottom: 0.4rem; }
+.tk-saved { display: inline-flex; align-items: center; gap: 0.3rem; color: var(--success); font-size: 0.85rem; padding: 0 0.5rem; }
+.tk-saved .material-symbols-outlined { font-size: 1.1rem; }
+
+.tk-place { color: var(--text-bright); font-weight: 600; text-decoration: underline; text-decoration-color: var(--border); text-underline-offset: 3px; overflow-wrap: anywhere; }
+.tk-place:hover { text-decoration-color: var(--primary); color: var(--primary); }
+a.tk-place.tk-place { display: inline; }
+
+.tk-table-wrap { overflow-x: auto; }
+.tk-table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+.tk-table th, .tk-table td { text-align: left; padding: 0.6rem 0.7rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+.tk-table th { font-size: 0.7rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; }
+.tk-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.tk-leg { border-top: 1px solid var(--border); padding-top: 1.1rem; display: flex; flex-direction: column; gap: 0.6rem; }
+.tk-leg-head { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+.tk-leg-head strong { color: var(--text-bright); }
+.tk-stops { list-style: none; position: relative; padding-left: 1.6rem; display: flex; flex-direction: column; gap: 1rem; }
+.tk-stops::before { content: ""; position: absolute; left: 0.45rem; top: 0.5rem; bottom: 0.5rem; border-left: 3px dashed var(--border); }
+.tk-stop { position: relative; display: flex; flex-direction: column; gap: 0.15rem; min-width: 0; }
+.tk-stop::before { content: ""; position: absolute; left: -1.6rem; top: 0.3rem; width: 15px; height: 15px; border-radius: 50%; background: var(--card-bg); border: 3px solid var(--primary); }
+.tk-stop.gem::before { border-color: var(--accent); background: rgba(242, 204, 96, 0.15); }
+.tk-stop-head { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+.tk-chip { font-size: 0.65rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; padding: 0.1rem 0.5rem; border-radius: 999px; border: 1px solid var(--border); color: var(--text-dim); background: #0d1117; }
+.tk-chip.food { color: var(--success); }
+.tk-chip.sight { color: var(--primary); }
+.tk-chip.gem { color: #000; background: var(--accent); border-color: transparent; }
+.tk-chip.warn { color: #fff; background: var(--danger); border-color: transparent; }
+.tk-notice { background: rgba(242, 204, 96, 0.08); border: 1px solid rgba(242, 204, 96, 0.3); border-radius: var(--radius); padding: 0.7rem 0.9rem; font-size: 0.85rem; }
+.tk-link-btn { align-self: flex-start; text-decoration: none; font-size: 0.85rem; }
+.tk-food-row { display: flex; flex-direction: column; gap: 0.15rem; padding: 0.7rem 0; border-bottom: 1px solid var(--border); }
+.tk-food-row:last-child { border-bottom: 0; }
+
+.tk-gem-label { font-size: 0.65rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--accent); margin-right: 0.35rem; }
+.local-secret { margin-bottom: 1rem; align-items: flex-start; }
+.local-secret > div { display: flex; flex-direction: column; gap: 0.25rem; }
+.day-head { flex-wrap: wrap; }
+.tk-day-extras { display: flex; flex-direction: column; gap: 0.5rem; border-top: 1px solid var(--border); padding-top: 1rem; font-size: 0.9rem; }
+.tk-day-extras > div { display: flex; gap: 0.6rem; align-items: flex-start; }
+.tk-day-extras .material-symbols-outlined { color: var(--primary); font-size: 1.2rem; }
+.tk-planb { margin-top: 1rem; display: flex; flex-direction: column; gap: 0.4rem; font-size: 0.85rem; background: rgba(255,255,255,0.03); border-radius: var(--radius); padding: 0.75rem 0.9rem; }
+
+/* The merged sidebar is taller than the screen, so it scrolls with the page. */
+.summary-sidebar.tk-sidebar { position: static; gap: 1.5rem; }
+.tk-sidebar .card { padding: 1.5rem; }
+
+.tk-bookrow { display: grid; grid-template-columns: 1fr auto; gap: 0.2rem 1rem; padding: 0.7rem 0; border-bottom: 1px solid var(--border); font-size: 0.9rem; }
+.tk-bookrow:last-child { border-bottom: 0; }
+.tk-when { font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; }
+.tk-when.past { color: var(--danger); }
+.tk-when.soon { color: var(--accent); }
+
+.tk-progress { height: 6px; background: var(--border); border-radius: 999px; overflow: hidden; }
+.tk-progress i { display: block; height: 100%; background: var(--success); }
+.tk-checks { border: 0; display: flex; flex-direction: column; }
+.tk-checks legend { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim); margin: 0.5rem 0 0.25rem; }
+.tk-check { display: flex; gap: 0.7rem; align-items: flex-start; padding: 0.35rem 0; cursor: pointer; font-size: 0.92rem; }
+.tk-check input { width: 18px; height: 18px; margin-top: 0.15rem; padding: 0; accent-color: var(--success); flex: none; }
+.tk-check.done span { text-decoration: line-through; color: var(--text-dim); }
+.tk-star { color: var(--accent); font-weight: 700; }
+.tk-loading { display: flex; align-items: center; gap: 0.75rem; color: var(--text-dim); }
+.tk-spinner { width: 20px; height: 20px; border-width: 3px; margin: 0; }
+
+.tk-toolkit { max-width: 860px; margin: 0 auto; }
+.tk-trav { display: grid; grid-template-columns: 1.2fr 0.5fr 1fr 1.4fr auto; gap: 0.5rem; align-items: center; }
+.tk-trav input { min-width: 0; }
+.tk-archive-head { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; margin-bottom: 0.75rem; }
+.tk-archive-row { display: flex; gap: 0.75rem; align-items: center; margin-bottom: 1rem; }
+.tk-archive-row .archive-card { margin-bottom: 0; flex: 1; min-width: 0; }
+.tk-danger { color: var(--danger); border-color: var(--danger); white-space: nowrap; }
+.archives-view code { background: #0d1117; border: 1px solid var(--border); padding: 0.1rem 0.4rem; border-radius: 4px; font-size: 0.85em; overflow-wrap: anywhere; }
+.archives-view > .tk-dim { margin-bottom: 1.5rem; }
+
+@media (max-width: 800px) {
+  .main-header, .main-nav { padding-left: 1rem; padding-right: 1rem; }
+  .main-nav { gap: 0.25rem; overflow-x: auto; }
+  .main-nav button { padding: 0.6rem 0.75rem; white-space: nowrap; }
+  .content { padding: 1rem; }
+  .card { padding: 1.25rem; }
+  .results-header { flex-direction: column; gap: 1rem; }
+  .results-header h2 { font-size: 1.5rem; }
+  .action-btns { flex-wrap: wrap; align-items: center; }
+  .tk-trav { grid-template-columns: 1fr 1fr; }
+  .activity-item { gap: 0.9rem; }
+}
+/* Let the results columns shrink on phones; wide tables scroll inside their own box. */
+.results-grid > *, .radar-grid-layout > * { min-width: 0; }

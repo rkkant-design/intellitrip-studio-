@@ -1,24 +1,35 @@
 # IntelliTrip Studio
 
-High-fidelity AI travel architecture. A React + Vite single-page app that generates
-cinematic, INR-costed itineraries and a matching AI "vibe" image via the Google Gemini API.
+High-fidelity AI travel architecture. A React + Vite single-page app that plans road trips
+and holidays: real routes with named stops and food on the way, hidden gems, day cards with
+"Hero Moments", INR budgets, booking deadlines and packing lists. It merges the original
+IntelliTrip with the Trip Kit planner, and uses the OpenAI API (gpt-5 with web search).
 
-The Gemini API key is **never** exposed to the browser — all AI calls run through a
-Netlify serverless function (`netlify/functions/generate.ts`) that reads the key from a
-server-side environment variable.
+The OpenAI API key is **never** exposed to the browser. All AI calls run through Netlify
+serverless functions that read the key from a server-side environment variable.
 
 ## Architecture
 
+A plan takes a few minutes (the model searches the web for routes, places and rules), far
+longer than a Netlify function may run. So the work runs as an OpenAI **background job**:
+
 ```
-Browser (React SPA)  ──POST /api/generate──►  Netlify Function  ──►  Gemini API
-        │                                       (holds GEMINI_API_KEY)
-        └── renders itinerary + vibe image ◄────── JSON response ◄──
+Browser ──POST /api/plan──►  plan.ts  ──start job──►  OpenAI (background mode)
+   │        ◄── { jobId } ───┘
+   └──every 4 s: GET /api/job?id=…──►  job.ts  ──check──►  OpenAI
+            ◄── running | done + cleaned plan | error
 ```
+
+- `netlify/functions/plan.ts`, `pack.ts` start a trip plan or a packing list.
+- `netlify/functions/job.ts` reports on a job, cleans the result, or cancels it.
+- `netlify/shared/` holds the request gates (same-origin, Firebase login once enabled, rate
+  limit), the OpenAI helpers and the prompts.
+- The browser remembers a running job in `localStorage`, so closing the page or reloading
+  does not lose the plan; it is saved to Archives when it finishes.
 
 ## Local development
 
-**Prerequisites:** Node.js 20+, and the [Netlify CLI](https://docs.netlify.com/cli/get-started/)
-(`npm i -g netlify-cli`) so the serverless function runs locally.
+**Prerequisites:** Node.js 20+.
 
 1. Install dependencies:
    ```bash
@@ -27,15 +38,14 @@ Browser (React SPA)  ──POST /api/generate──►  Netlify Function  ──
 2. Create a `.env` from the template and add your key:
    ```bash
    cp .env.example .env
-   # then edit .env and set GEMINI_API_KEY
+   # then edit .env and set OPENAI_API_KEY
    ```
-3. Run the app (serves the Vite frontend *and* the function):
+3. Run the app with the functions:
    ```bash
-   npm run dev
+   npm run dev:local
    ```
-   Open http://localhost:8888.
-
-> `npm run dev:vite` runs the frontend alone (no API). Use `npm run dev` for the full app.
+   Open http://localhost:3000. This serves the functions straight from Vite, so the
+   Netlify CLI is optional (`npm run dev` uses it if installed).
 
 ## Deploy to Netlify
 
@@ -44,25 +54,29 @@ dir, and redirects).
 
 1. Push this repo to GitHub.
 2. In Netlify: **Add new site → Import an existing project**, pick the repo.
-   Build settings are read from `netlify.toml` (no manual config needed).
-3. Under **Site settings → Environment variables**, add:
-   - `GEMINI_API_KEY` = your Gemini key
-   - *(optional)* `GEMINI_TEXT_MODEL`, `GEMINI_IMAGE_MODEL`
-4. Deploy. Netlify builds the frontend to `dist/` and deploys the function to `/api/generate`.
+3. Under **Site settings → Environment variables**, add (scope: Functions):
+   - `OPENAI_API_KEY` = your OpenAI key
+   - *(optional)* `OPENAI_MODEL` (default `gpt-5`), `REASONING_EFFORT` (default `low`),
+     `WEB_SEARCH`, `MAX_SEARCHES`
+4. Deploy. Netlify builds the frontend to `dist/` and deploys the functions under `/api/*`.
 
-## Features in the Briefing tab
+## Tabs
 
-- **Live weather** — real geocoding + 7-day forecast via [Open-Meteo](https://open-meteo.com)
-  (free, no key required).
-- **Live traffic map** — Mapbox GL with live congestion tiles. Set `VITE_MAPBOX_TOKEN`
-  (a public `pk.…` token) in your env / Netlify to enable it; restrict the token by URL in
-  your Mapbox account. Without it, the map shows a "not configured" placeholder and the rest
-  of the app is unaffected.
+- **Architect** plans a trip: from/to, dates, travellers, vibe, how you're travelling, most
+  driving per day, budget and food. The plan shows a Road Trip section (route options,
+  stop-by-stop drives with Google Maps links, where to eat, driving tips, a warning when a
+  drive exceeds your daily limit), day cards with hidden gems and Hero Moments, a stay pick,
+  budget, booking deadlines, documents, sources and a packing list.
+- **Live Radar** shows live weather ([Open-Meteo](https://open-meteo.com), free, no key) and
+  a live traffic map (Mapbox GL; set `VITE_MAPBOX_TOKEN`), plus the plan's advisories.
+- **Archives** keeps every plan in this browser and imports trip files from the laptop
+  Trip Kit app.
+- **Toolkit** holds the Travellers profile (used by every plan), the Book By calculator and
+  the Leave-Home checklist. These work without AI.
 
 ## Notes
 
-- **AI advisories** in the Briefing are generated alongside your itinerary as planning
-  guidance — they are not a live real-time feed (weather and traffic above are live).
-- The "login" is a display-name only (no auth). Add a real auth provider before handling
-  any user data.
-- Archives are stored in the browser's `localStorage`.
+- AI advisories are planning guidance, not a live feed (weather and traffic are live).
+- The "login" is a display-name only until Firebase is configured (see `.env.example`).
+- Archives, travellers and checklists are stored in the browser's `localStorage`, so they
+  don't sync between devices yet.
