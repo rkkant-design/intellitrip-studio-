@@ -83,6 +83,9 @@ export interface SavedTrip {
   packing?: Packing | null;
   packed?: Record<string, boolean>;
   checks?: Checks | null;
+  // Earlier versions of the plan, newest first, so a change can be undone.
+  history?: { plan: Plan; checks?: Checks | null; change: string; scope: 'all' | number; at: string }[];
+  lastChange?: { note: string; change: string; scope: 'all' | number; at: string } | null;
   dateCreated: string;
 }
 
@@ -453,7 +456,7 @@ function RoadTripCard({ rt, maxDrive }: { rt: RoadTrip; maxDrive?: string }) {
   );
 }
 
-function DayCard({ day }: { day: DayPlan }) {
+function DayCard({ day, onChange }: { day: DayPlan; onChange?: (day: number) => void }) {
   return (
     <div className="day-card card">
       <div className="day-head">
@@ -461,6 +464,11 @@ function DayCard({ day }: { day: DayPlan }) {
         <h3>{day.title}</h3>
         {day.vibe && <span className="tk-chip util">{day.vibe}</span>}
         {day.date && <span className="tk-dim tk-mono">{fmtDate(day.date)}</span>}
+        {onChange && (
+          <button className="btn-secondary tk-day-change" onClick={() => onChange(day.day)}>
+            <span className="material-symbols-outlined" aria-hidden="true">edit_note</span>Change this day
+          </button>
+        )}
       </div>
       {day.narrative && <p className="day-narrative">{day.narrative}</p>}
 
@@ -568,12 +576,14 @@ export function PackingCard({
 }
 
 export function PlanView({
-  trip, packingSlot, checkProgress, onRecheck,
+  trip, packingSlot, changeSlot, checkProgress, onRecheck, onChangeDay,
 }: {
   trip: SavedTrip;
   packingSlot: React.ReactNode;
+  changeSlot?: React.ReactNode;
   checkProgress: { done: number; total: number } | null;
   onRecheck: () => void;
+  onChangeDay?: (day: number) => void;
 }) {
   const p = trip.plan;
   const total = arr(p.budget).reduce((s, b) => s + (Number(b.amountInr) || 0), 0);
@@ -582,6 +592,7 @@ export function PlanView({
     <ChecksContext.Provider value={trip.checks || null}>
     <div className="results-grid">
       <div className="itinerary-list">
+        {changeSlot}
         <MapCheckCard trip={trip} progress={checkProgress} onRecheck={onRecheck} />
         {(p.weather || arr(p.alerts).length > 0) && (
           <div className="card tk-card">
@@ -591,7 +602,7 @@ export function PlanView({
           </div>
         )}
         {p.roadTrip && typeof p.roadTrip === 'object' && <RoadTripCard rt={p.roadTrip} maxDrive={trip.form.maxDrive} />}
-        {arr(p.days).map((day, i) => <DayCard key={i} day={day} />)}
+        {arr(p.days).map((day, i) => <DayCard key={i} day={day} onChange={onChangeDay} />)}
         {packingSlot}
       </div>
 

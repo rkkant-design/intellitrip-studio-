@@ -488,3 +488,17 @@ a.tk-place.tk-place { display: inline; }
   .tk-modal { max-height: 94vh; border-radius: 14px 14px 0 0; padding: 1.1rem 1rem calc(1.1rem + env(safe-area-inset-bottom, 0px)); }
   .tk-share-text { min-height: 14rem; }
 }
+
+/* --- Change part of a trip --- */
+.tk-day-change { margin-left: auto; display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.8rem; padding: 0.35rem 0.75rem; }
+.tk-day-change .material-symbols-outlined { font-size: 1rem; }
+.tk-chips { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.tk-chip-btn { background: #0d1117; color: var(--text); border: 1px solid var(--border); border-radius: 999px; padding: 0.4rem 0.8rem; font: inherit; font-size: 0.8rem; cursor: pointer; }
+.tk-chip-btn:hover { border-color: var(--primary); color: var(--text-bright); }
+.tk-change-banner { border-color: rgba(88, 166, 255, 0.45); }
+.tk-change-banner.done { border-color: rgba(242, 204, 96, 0.45); }
+.tk-change-row .material-symbols-outlined { color: var(--accent); }
+.btn-secondary:disabled, .btn-accent:disabled { opacity: 0.5; cursor: not-allowed; }
+@media (max-width: 800px) {
+  .tk-day-change { margin-left: 0; }
+}

@@ -14,6 +14,7 @@ import {
 } from './tripkit';
 import { checkPlan, placesIn } from './placecheck';
 import { ShareSheet } from './share';
+import { type PendingChange, type Scope, ChangeBanner, ChangeSheet, PENDING_CHANGE_KEY, applyChange, undoChange } from './revise';
 import { initializeApp } from 'firebase/app';
 import {
   getAuth,
@@ -361,6 +362,10 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [checking, setChecking] = useState<{ tripId: string; done: number; total: number } | null>(null);
   const [sharing, setSharing] = useState(false);
+  const [changeScope, setChangeScope] = useState<Scope | null>(null); // the Change sheet is open
+  const [pendingChange, setPendingChange] = useState<PendingChange | null>(() => store.get<PendingChange | null>(PENDING_CHANGE_KEY, null));
+  const [changeSeconds, setChangeSeconds] = useState(0);
+  const archivesRef = useRef<SavedTrip[]>([]);
   const checkingRef = useRef<string | null>(null);
   const importRef = useRef<HTMLInputElement>(null);
 
@@ -407,6 +412,69 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
     });
     setTrip((cur) => (cur && cur.id === id ? { ...cur, ...patch } : cur));
   }, [persistArchives]);
+
+  archivesRef.current = archives;
+
+  // Applies `fn` to the latest saved version of a trip (other edits may have landed meanwhile).
+  const updateTrip = useCallback((id: string, fn: (t: SavedTrip) => SavedTrip) => {
+    setArchives((prev) => {
+      const current = prev.find((x) => x.id === id);
+      if (!current) return prev;
+      const changed = fn(current);
+      const next = prev.map((x) => (x.id === id ? changed : x));
+      const saved = persistArchives(next);
+      if (saved) setTrip((cur) => (cur && cur.id === id ? changed : cur));
+      return saved ?? prev;
+    });
+  }, [persistArchives]);
+
+  const startChange = async (t: SavedTrip, scope: Scope, change: string) => {
+    setChangeScope(null);
+    try {
+      const jobId = await startJob('/api/revise', { ...t.form, profile, plan: t.plan, scope, change }, await getHeaders());
+      const next: PendingChange = { jobId, tripId: t.id, scope, change, startedAt: Date.now() };
+      store.set(PENDING_CHANGE_KEY, next);
+      setPendingChange(next);
+    } catch (err: any) {
+      showToast(err?.message || "Couldn't start the change.");
+    }
+  };
+
+  // Follow a change job until it's ready; survives tab switches and reloads like new plans do.
+  useEffect(() => {
+    if (!pendingChange) return;
+    let cancelled = false;
+    const { jobId, tripId, scope, change, startedAt } = pendingChange;
+    const tick = () => setChangeSeconds(Math.round((Date.now() - startedAt) / 1000));
+    tick();
+    const timer = setInterval(tick, 1000);
+    waitForJob<any>(jobId, getHeaders, startedAt, undefined, () => cancelled)
+      .then((result) => {
+        if (cancelled) return;
+        const latest = archivesRef.current.find((x) => x.id === tripId);
+        if (!latest) {
+          showToast('That trip was deleted, so the change was not applied.');
+          return;
+        }
+        try {
+          const changed = applyChange(latest, scope, change, result);
+          updateTrip(tripId, () => changed);
+          showToast(`${scope === 'all' ? 'Trip' : `Day ${scope}`} updated.`);
+        } catch (e: any) {
+          showToast(e?.message || 'The change could not be applied.');
+        }
+      })
+      .catch((err: Error) => {
+        if (cancelled || err.message === 'cancelled') return;
+        showToast(err.message);
+      })
+      .finally(() => {
+        if (cancelled) return;
+        store.set(PENDING_CHANGE_KEY, null);
+        setPendingChange(null);
+      });
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [pendingChange, getHeaders, updateTrip, showToast]);
 
   // Checks the trip's places and drives against real map data, once at a time.
   const runChecks = useCallback(async (t: SavedTrip) => {
@@ -696,6 +764,10 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
                     <span className="tk-saved" title="Saved in Archives on this device">
                       <span className="material-symbols-outlined" aria-hidden="true">check_circle</span>Saved
                     </span>
+                    <button onClick={() => setChangeScope('all')} className="btn-secondary tk-share-btn" disabled={Boolean(pendingChange)}
+                      title={pendingChange ? 'A change is already being made' : 'Change part of this trip'}>
+                      <span className="material-symbols-outlined" aria-hidden="true">edit_note</span>Change
+                    </button>
                     <button onClick={() => setSharing(true)} className="btn-secondary tk-share-btn">
                       <span className="material-symbols-outlined" aria-hidden="true">share</span>Share
                     </button>
@@ -715,6 +787,12 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
                 <PlanView
                   trip={trip}
                   checkProgress={checking && checking.tripId === trip.id ? checking : null}
+                  onChangeDay={pendingChange ? undefined : (d) => setChangeScope(d)}
+                  changeSlot={
+                    <ChangeBanner trip={trip} pending={pendingChange} seconds={changeSeconds}
+                      onUndo={() => { updateTrip(trip.id, undoChange); showToast('Change undone.'); }}
+                      onDismiss={() => updateTrip(trip.id, (t) => ({ ...t, lastChange: null }))} />
+                  }
                   onRecheck={() => runChecks(trip)}
                   packingSlot={<PackingCard trip={trip} onChange={upsertTrip} makeList={() => makePackingList(trip)} busy={packBusy} />}
                 />
@@ -824,6 +902,10 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
       </main>
 
       {sharing && trip && <ShareSheet trip={trip} onClose={() => setSharing(false)} />}
+      {changeScope !== null && trip && (
+        <ChangeSheet trip={trip} initialScope={changeScope}
+          onSubmit={(scope, change) => startChange(trip, scope, change)} onClose={() => setChangeScope(null)} />
+      )}
       {toast && <Toast message={toast} />}
     </div>
   );

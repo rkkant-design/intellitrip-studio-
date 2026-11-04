@@ -126,3 +126,42 @@ export function tripContext(req: TripRequest): string {
     `What they want from the trip: ${clip(req.idealTripDescription, 800) || 'a memorable, well-paced trip'}`,
   ].join('\n');
 }
+
+// --- Changing part of an existing plan ---
+
+const REVISE_RULES = `Apply only the requested change. Keep everything the change does not touch exactly as it is:
+the same places, times, wording and order. Follow every planning rule above, including real named places,
+hidden gems that are genuinely lesser-known, food that fits their preferences, and the daily driving limit.`;
+
+export const REVISE_DAY_SCHEMA = `Return JSON with exactly these keys:
+{
+ "changeNote": "one short sentence telling the family what you changed",
+ "day": { the revised day, in exactly the same shape as the days in the current plan },
+ "leg": { the revised road-trip leg for this day, in the same shape as the current legs } or null if this day's drive is unchanged or there is no drive,
+ "budget": [ the full revised budget list, same shape ] or null if the costs did not change
+}`;
+
+export const REVISE_TRIP_SCHEMA = `${PLAN_SCHEMA}
+Also add one more key: "changeNote": "one short sentence telling the family what you changed".`;
+
+export type ReviseScope = 'all' | number;
+
+/** The model's input for a change: the trip, the current plan and the requested change. */
+export function reviseInput(req: TripRequest, plan: unknown, scope: ReviseScope, change: string): string {
+  const current = { ...(plan as Record<string, unknown>) };
+  delete current.sources;
+  const where = scope === 'all' ? 'the whole trip' : `day ${scope} only`;
+  return [
+    tripContext(req),
+    '',
+    'CURRENT PLAN (JSON):',
+    JSON.stringify(current),
+    '',
+    `REQUESTED CHANGE, for ${where}: ${clip(change, 600)}`,
+    '',
+    REVISE_RULES,
+    scope === 'all' ? '' : `Change day ${scope} and, only if needed, its road-trip leg and the budget. Do not return other days.`,
+    '',
+    scope === 'all' ? REVISE_TRIP_SCHEMA : REVISE_DAY_SCHEMA,
+  ].join('\n');
+}
