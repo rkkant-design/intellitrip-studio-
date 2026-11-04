@@ -502,3 +502,23 @@ a.tk-place.tk-place { display: inline; }
 @media (max-width: 800px) {
   .tk-day-change { margin-left: 0; }
 }
+
+/* --- Trip Wallet --- */
+.tk-wallet-fuel { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.75rem; }
+.tk-wallet-fuel .field, .tk-wallet-add .field { margin-bottom: 0; }
+.tk-wallet-fuel input, .tk-wallet-fuel select, .tk-wallet-add input, .tk-wallet-add select { min-width: 0; width: 100%; }
+.tk-wallet-total { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; flex-wrap: wrap; font-size: 1rem; }
+.tk-over { color: var(--danger) !important; }
+.tk-progress i.over { background: var(--danger); }
+.tk-wallet-add { display: grid; grid-template-columns: 1fr 0.8fr 2fr; gap: 0.75rem; }
+.tk-chip-btn.on { background: var(--primary); border-color: var(--primary); color: #fff; }
+.tk-expenses { display: flex; flex-direction: column; gap: 0.75rem; }
+.tk-expense-day { display: flex; justify-content: space-between; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim); border-bottom: 1px solid var(--border); padding-bottom: 0.3rem; }
+.tk-expense { display: flex; align-items: center; gap: 0.6rem; padding: 0.4rem 0; font-size: 0.9rem; }
+.tk-expense .tk-grow { min-width: 0; overflow-wrap: anywhere; }
+.tk-expense .btn-icon-bg { width: 30px; height: 30px; }
+@media (max-width: 800px) {
+  .tk-wallet-fuel { grid-template-columns: 1fr 1fr; }
+  .tk-wallet-add { grid-template-columns: 1fr 1fr; }
+  .tk-wallet-note { grid-column: 1 / -1; }
+}

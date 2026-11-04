@@ -75,6 +75,25 @@ export interface Plan {
 export interface PackItem { text: string; qty?: string; star?: boolean }
 export interface Packing { groups: { name: string; items: PackItem[] }[] }
 
+export interface Expense {
+  id: string;
+  amount: number;
+  category: string;
+  day: number;
+  note?: string;
+  at: string;
+}
+
+/** Money for one trip: fuel settings (overriding the Travellers defaults) and what was spent. */
+export interface Wallet {
+  fuelType?: string;
+  // Kept as typed ("15.5"), so decimals can be entered; parsed where used.
+  mileage?: string;
+  fuelPrice?: string;
+  extraKm?: string;
+  expenses?: Expense[];
+}
+
 export interface SavedTrip {
   id: string;
   form: FormState;
@@ -86,12 +105,16 @@ export interface SavedTrip {
   // Earlier versions of the plan, newest first, so a change can be undone.
   history?: { plan: Plan; checks?: Checks | null; change: string; scope: 'all' | number; at: string }[];
   lastChange?: { note: string; change: string; scope: 'all' | number; at: string } | null;
+  wallet?: Wallet;
   dateCreated: string;
 }
 
 export interface Profile {
   homeCity: string;
   vehicle: string;
+  fuelType: string; // Petrol | Diesel | CNG | Electric
+  mileage: string; // km per litre (km per kg for CNG, km per kWh for electric)
+  fuelPrice: string; // ₹ per litre / kg / kWh
   pace: string;
   food: string;
   budgetPerDay: string;
@@ -126,7 +149,7 @@ export const store = {
 };
 
 export const DEFAULT_PROFILE: Profile = {
-  homeCity: 'Chennai', vehicle: '', pace: 'Balanced', food: '', budgetPerDay: '', alwaysCarry: '',
+  homeCity: 'Chennai', vehicle: '', fuelType: 'Petrol', mileage: '', fuelPrice: '', pace: 'Balanced', food: '', budgetPerDay: '', alwaysCarry: '',
   travellers: [{ name: 'Kamal', age: '43', food: '', notes: '' }],
 };
 export const loadProfile = (): Profile => ({ ...DEFAULT_PROFILE, ...store.get<Partial<Profile>>(PROFILE_KEY, {}) });
@@ -139,6 +162,11 @@ export const emptyForm = (profile: Profile): FormState => ({
 });
 
 // --- HELPERS ---
+
+export const fuelUnits = (fuelType?: string) =>
+  fuelType === 'CNG' ? { unit: 'kg', mileage: 'km per kg' }
+    : fuelType === 'Electric' ? { unit: 'kWh', mileage: 'km per kWh' }
+    : { unit: 'litre', mileage: 'km per litre' };
 
 export const arr = <T,>(x: T[] | undefined | null): T[] => (Array.isArray(x) ? x : []);
 export const formatINR = (n: number | undefined | null): string => `₹${Math.round(Number(n ?? 0)).toLocaleString('en-IN')}`;
@@ -700,6 +728,14 @@ export function TravellersCard({ profile, onSave }: { profile: Profile; onSave: 
       <div className="grid-2">
         {field('homeCity', 'Home city (default start)', 'Chennai')}
         {field('vehicle', 'Your car', 'e.g. Hyundai Creta diesel, 5 seats')}
+        <div className="field">
+          <label htmlFor="p-fuelType">Fuel</label>
+          <select id="p-fuelType" value={p.fuelType} onChange={(e) => set('fuelType', e.target.value)}>
+            {['Petrol', 'Diesel', 'CNG', 'Electric'].map((o) => <option key={o}>{o}</option>)}
+          </select>
+        </div>
+        {field('mileage', `Mileage (${fuelUnits(p.fuelType).mileage})`, 'e.g. 15')}
+        {field('fuelPrice', `Fuel price (₹ per ${fuelUnits(p.fuelType).unit})`, 'e.g. 102')}
         <div className="field">
           <label htmlFor="p-pace">Pace</label>
           <select id="p-pace" value={p.pace} onChange={(e) => set('pace', e.target.value)}>

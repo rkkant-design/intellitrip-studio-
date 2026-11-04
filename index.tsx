@@ -14,6 +14,7 @@ import {
 } from './tripkit';
 import { checkPlan, placesIn } from './placecheck';
 import { ShareSheet } from './share';
+import { WalletCard } from './wallet';
 import { type PendingChange, type Scope, ChangeBanner, ChangeSheet, PENDING_CHANGE_KEY, applyChange, undoChange } from './revise';
 import { initializeApp } from 'firebase/app';
 import {
@@ -794,7 +795,12 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
                       onDismiss={() => updateTrip(trip.id, (t) => ({ ...t, lastChange: null }))} />
                   }
                   onRecheck={() => runChecks(trip)}
-                  packingSlot={<PackingCard trip={trip} onChange={upsertTrip} makeList={() => makePackingList(trip)} busy={packBusy} />}
+                  packingSlot={
+                    <>
+                      <PackingCard trip={trip} onChange={upsertTrip} makeList={() => makePackingList(trip)} busy={packBusy} />
+                      <WalletCard trip={trip} profile={profile} onChange={upsertTrip} />
+                    </>
+                  }
                 />
               </div>
             )}
