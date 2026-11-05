@@ -604,11 +604,12 @@ export function PackingCard({
 }
 
 export function PlanView({
-  trip, packingSlot, changeSlot, checkProgress, onRecheck, onChangeDay,
+  trip, packingSlot, changeSlot, sidebarSlot, checkProgress, onRecheck, onChangeDay,
 }: {
   trip: SavedTrip;
   packingSlot: React.ReactNode;
   changeSlot?: React.ReactNode;
+  sidebarSlot?: React.ReactNode;
   checkProgress: { done: number; total: number } | null;
   onRecheck: () => void;
   onChangeDay?: (day: number) => void;
@@ -677,6 +678,7 @@ export function PlanView({
             ))}
           </div>
         )}
+        {sidebarSlot}
         {arr(p.documents).length > 0 && (
           <div className="card info-card">
             <h3>Documents</h3>

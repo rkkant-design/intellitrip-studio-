@@ -522,3 +522,13 @@ a.tk-place.tk-place { display: inline; }
   .tk-wallet-add { grid-template-columns: 1fr 1fr; }
   .tk-wallet-note { grid-column: 1 / -1; }
 }
+
+/* --- Calendar reminders --- */
+.tk-reminders { display: flex; flex-direction: column; }
+.tk-reminder { display: flex; align-items: center; gap: 0.75rem; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid var(--border); }
+.tk-reminder:last-child { border-bottom: 0; }
+.tk-reminder .tk-check { flex: 1; min-width: 0; padding: 0; }
+.tk-reminder.past { opacity: 0.55; }
+.tk-gcal { display: inline-flex; align-items: center; gap: 0.25rem; flex: none; font-size: 0.8rem; color: var(--primary); text-decoration: none; border: 1px solid var(--border); border-radius: 999px; padding: 0.25rem 0.6rem; }
+.tk-gcal .material-symbols-outlined { font-size: 1rem; }
+.tk-gcal:hover { border-color: var(--primary); }

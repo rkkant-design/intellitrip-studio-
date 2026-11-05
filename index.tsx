@@ -15,6 +15,7 @@ import {
 import { checkPlan, placesIn } from './placecheck';
 import { ShareSheet } from './share';
 import { WalletCard } from './wallet';
+import { RemindersCard, RemindersSheet } from './reminders';
 import { type PendingChange, type Scope, ChangeBanner, ChangeSheet, PENDING_CHANGE_KEY, applyChange, undoChange } from './revise';
 import { initializeApp } from 'firebase/app';
 import {
@@ -363,6 +364,7 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [checking, setChecking] = useState<{ tripId: string; done: number; total: number } | null>(null);
   const [sharing, setSharing] = useState(false);
+  const [reminding, setReminding] = useState(false);
   const [changeScope, setChangeScope] = useState<Scope | null>(null); // the Change sheet is open
   const [pendingChange, setPendingChange] = useState<PendingChange | null>(() => store.get<PendingChange | null>(PENDING_CHANGE_KEY, null));
   const [changeSeconds, setChangeSeconds] = useState(0);
@@ -789,6 +791,7 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
                   trip={trip}
                   checkProgress={checking && checking.tripId === trip.id ? checking : null}
                   onChangeDay={pendingChange ? undefined : (d) => setChangeScope(d)}
+                  sidebarSlot={<RemindersCard trip={trip} onOpen={() => setReminding(true)} />}
                   changeSlot={
                     <ChangeBanner trip={trip} pending={pendingChange} seconds={changeSeconds}
                       onUndo={() => { updateTrip(trip.id, undoChange); showToast('Change undone.'); }}
@@ -908,6 +911,7 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
       </main>
 
       {sharing && trip && <ShareSheet trip={trip} onClose={() => setSharing(false)} />}
+      {reminding && trip && <RemindersSheet trip={trip} onClose={() => setReminding(false)} />}
       {changeScope !== null && trip && (
         <ChangeSheet trip={trip} initialScope={changeScope}
           onSubmit={(scope, change) => startChange(trip, scope, change)} onClose={() => setChangeScope(null)} />
