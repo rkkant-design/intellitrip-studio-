@@ -14,6 +14,7 @@ Rules:
 - Every cost is an estimate in Indian rupees. Never present a price as booked.
 - Respect the travellers' food preferences in every meal suggestion.
 - This family mostly travels by road trip in their own car. Plan drives in daylight where possible, keep each day's driving within their limit, and break long drives with real stops.
+- Every drive must head towards where they are going that day. Never send them away from the destination and back again: an overnight stop on the way must lie on the road between the start and the destination (for example, from Madurai to Thekkady there is no reason to go via Trichy).
 - In their own car, the car must come home: never suggest flying, taking a train or a bus back. If the drive home does not fit the daily limit, split it with an overnight stop on the way, and if the dates are too short for that, cut sightseeing days and say clearly that one more day would help.
 - Hidden gems are genuinely lesser-known places worth a detour: a quiet viewpoint, a village temple, a lake, a heritage street, a local eatery. A famous landmark, a top-10 attraction of the area or anything already in the day's main plan is never a hidden gem. Only name places you can confirm exist and are open to visitors; never invent one.
 - Restaurants and food stops must be specific, currently operating places you found in your search, with their real branch location. Never list a chain branch you have not confirmed in that town, and never use a bus stand, a generic "local bakery" or "any fuel bunk" as a food stop. If unsure whether one is still open, say "check it's open".
@@ -131,10 +132,15 @@ export function tripContext(req: TripRequest): string {
 
 const REVISE_RULES = `Apply only the requested change. Keep everything the change does not touch exactly as it is:
 the same places, times, wording and order. Follow every planning rule above, including real named places,
-hidden gems that are genuinely lesser-known, food that fits their preferences, and the daily driving limit.`;
+hidden gems that are genuinely lesser-known, food that fits their preferences, and the daily driving limit.
+If the change alters where they start, where they are going, the dates, how many are travelling or how they travel,
+it touches the whole trip: rebuild every route, drive, stop, overnight town, stay, budget line and booking date from
+the new details, as if planning afresh. Do not keep stops or overnight towns that only made sense for the old details,
+and never route them away from the destination and back.`;
 
 export const REVISE_DAY_SCHEMA = `Return JSON with exactly these keys:
 {
+ "needsWholeTrip": false, set it to true (and leave the other keys empty) if this change really alters where they start, where they are going, the dates or who is travelling, because then the whole trip must be replanned,
  "changeNote": "one short sentence telling the family what you changed",
  "day": { the revised day, in exactly the same shape as the days in the current plan },
  "leg": { the revised road-trip leg for this day, in the same shape as the current legs } or null if this day's drive is unchanged or there is no drive,
@@ -142,22 +148,44 @@ export const REVISE_DAY_SCHEMA = `Return JSON with exactly these keys:
 }`;
 
 export const REVISE_TRIP_SCHEMA = `${PLAN_SCHEMA}
-Also add one more key: "changeNote": "one short sentence telling the family what you changed".`;
+Also add two more keys:
+"changeNote": "one short sentence telling the family what you changed",
+"tripDetails": null, or, only if the requested change itself alters them, the new values:
+  {"fromLocation": "town they now start from", "startDate": "YYYY-MM-DD", "nights": 2, "adults": 2, "children": 0}
+  (include only the fields that changed).`;
 
 export type ReviseScope = 'all' | number;
 
 /** The model's input for a change: the trip, the current plan and the requested change. */
-export function reviseInput(req: TripRequest, plan: unknown, scope: ReviseScope, change: string): string {
+const DETAIL_LABELS: [keyof TripRequest, string][] = [
+  ['fromLocation', 'Starting from'], ['destination', 'Destination'], ['startDate', 'Start date'], ['duration', 'Nights'],
+  ['adults', 'Adults'], ['children', 'Children'], ['mode', "How they're travelling"], ['maxDrive', 'Most driving in a day'],
+  ['budget', 'Budget'], ['food', 'Food'],
+];
+
+/** "Starting from: Chennai → Madurai" lines for every trip detail that changed. */
+export function detailChanges(before: TripRequest | undefined, after: TripRequest): string[] {
+  if (!before) return [];
+  return DETAIL_LABELS
+    .filter(([k]) => clip(before[k], 120) !== clip(after[k], 120))
+    .map(([k, label]) => `${label}: ${clip(before[k], 120) || '(none)'} → ${clip(after[k], 120) || '(none)'}`);
+}
+
+export function reviseInput(req: TripRequest, plan: unknown, scope: ReviseScope, change: string, before?: TripRequest): string {
   const current = { ...(plan as Record<string, unknown>) };
   delete current.sources;
   const where = scope === 'all' ? 'the whole trip' : `day ${scope} only`;
+  const changed = detailChanges(before, req);
   return [
     tripContext(req),
     '',
+    changed.length
+      ? `THE TRIP DETAILS HAVE CHANGED. The plan below was made for the old details; the details above are the new ones:\n${changed.join('\n')}\nRebuild everything that depends on them.`
+      : '',
     'CURRENT PLAN (JSON):',
     JSON.stringify(current),
     '',
-    `REQUESTED CHANGE, for ${where}: ${clip(change, 600)}`,
+    `REQUESTED CHANGE, for ${where}: ${clip(change, 600) || 'Replan the trip for the new details.'}`,
     '',
     REVISE_RULES,
     scope === 'all' ? '' : `Change day ${scope} and, only if needed, its road-trip leg and the budget. Do not return other days.`,

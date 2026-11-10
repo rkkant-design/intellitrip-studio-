@@ -16,7 +16,7 @@ import { checkPlan, placesIn } from './placecheck';
 import { ShareSheet } from './share';
 import { WalletCard } from './wallet';
 import { RemindersCard, RemindersSheet } from './reminders';
-import { type PendingChange, type Scope, ChangeBanner, ChangeSheet, PENDING_CHANGE_KEY, applyChange, undoChange } from './revise';
+import { type PendingChange, type Scope, ChangeBanner, ChangeSheet, PENDING_CHANGE_KEY, applyChange, needsWholeTrip, undoChange } from './revise';
 import { initializeApp } from 'firebase/app';
 import {
   getAuth,
@@ -460,11 +460,14 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
     });
   }, [persistArchives]);
 
-  const startChange = async (t: SavedTrip, scope: Scope, change: string) => {
+  // `newForm` is set when the person edited the trip details; the AI then replans the whole trip for them.
+  const startChange = async (t: SavedTrip, scope: Scope, change: string, newForm: FormState | null = null) => {
     setChangeScope(null);
     try {
-      const jobId = await startJob('/api/revise', { ...t.form, profile, plan: t.plan, scope, change }, await getHeaders());
-      const next: PendingChange = { jobId, tripId: t.id, scope, change, startedAt: Date.now() };
+      const details = newForm || t.form;
+      const body = { ...details, profile, plan: t.plan, scope: newForm ? 'all' : scope, change, previous: newForm ? t.form : undefined };
+      const jobId = await startJob('/api/revise', body, await getHeaders());
+      const next: PendingChange = { jobId, tripId: t.id, scope: newForm ? 'all' : scope, change, startedAt: Date.now(), form: newForm || undefined };
       store.set(PENDING_CHANGE_KEY, next);
       setPendingChange(next);
     } catch (err: any) {
@@ -472,11 +475,14 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
     }
   };
 
+  const startChangeRef = useRef<typeof startChange | null>(null);
+  startChangeRef.current = startChange;
+
   // Follow a change job until it's ready; survives tab switches and reloads like new plans do.
   useEffect(() => {
     if (!pendingChange) return;
     let cancelled = false;
-    const { jobId, tripId, scope, change, startedAt } = pendingChange;
+    const { jobId, tripId, scope, change, startedAt, form: newForm } = pendingChange;
     const tick = () => setChangeSeconds(Math.round((Date.now() - startedAt) / 1000));
     tick();
     const timer = setInterval(tick, 1000);
@@ -488,8 +494,14 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
           showToast('That trip was deleted, so the change was not applied.');
           return;
         }
+        // The AI said this day-only request really changes the whole trip (a new start, dates, travellers).
+        if (scope !== 'all' && needsWholeTrip(result)) {
+          showToast('That change affects every day, so the whole trip is being updated.');
+          startChangeRef.current?.(latest, 'all', change, newForm || null);
+          return;
+        }
         try {
-          const changed = applyChange(latest, scope, change, result);
+          const changed = applyChange(latest, scope, change, result, newForm);
           updateTrip(tripId, () => changed);
           showToast(`${scope === 'all' ? 'Trip' : `Day ${scope}`} updated.`);
         } catch (e: any) {
@@ -953,7 +965,7 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
       {reminding && trip && <RemindersSheet trip={trip} onClose={() => setReminding(false)} />}
       {changeScope !== null && trip && (
         <ChangeSheet trip={trip} initialScope={changeScope}
-          onSubmit={(scope, change) => startChange(trip, scope, change)} onClose={() => setChangeScope(null)} />
+          onSubmit={(scope, change, newForm) => startChange(trip, scope, change, newForm)} onClose={() => setChangeScope(null)} />
       )}
       {toast && <Toast message={toast} />}
     </div>

@@ -37,6 +37,7 @@ export interface Checks {
   places: Record<string, PlaceCheck>;
   legs: Record<string, LegCheck | null>;
   routeSource?: string;
+  direct?: LegCheck | null; // the plain road from the start to the destination, for spotting detours
 }
 
 type Kind = 'food' | 'stay' | 'sight';
@@ -350,10 +351,35 @@ export async function checkPlan(
     tick();
   }
 
+  const direct = fromPt && destPt ? await routeThrough([fromPt, destPt]) : null;
+
   return {
     at: new Date().toISOString(),
     places: results,
     legs: legChecks,
     routeSource: Object.values(legChecks).find(Boolean)?.source,
+    direct,
   };
+}
+
+/**
+ * The drive to the destination compared with the direct road: the legs from the start up to the first one
+ * that arrives there. Returns null when they are close, or when the map check couldn't measure them.
+ */
+export function detour(plan: Plan, checks: Checks | null | undefined, destination: string) {
+  const direct = checks?.direct;
+  if (!direct || !direct.km) return null;
+  const legs = arr(plan.roadTrip && typeof plan.roadTrip === 'object' ? plan.roadTrip.legs : []);
+  const destWords = distinctiveWords(townOnly(destination));
+  let outbound = 0;
+  for (let i = 0; i < legs.length; i++) {
+    const real = checks?.legs[String(i)];
+    if (!real) return null;
+    outbound += real.km;
+    if (destWords.some((w) => tokens(legs[i].to || '').some((t) => sameWord(w, t)))) {
+      // Stops and short detours are expected; this flags a route that goes a long way round.
+      return outbound > direct.km * 1.4 + 40 ? { outboundKm: outbound, directKm: direct.km, directHours: direct.hours } : null;
+    }
+  }
+  return null;
 }

@@ -10,14 +10,15 @@
 import type { Handler, HandlerEvent } from '@netlify/functions';
 import { guard, json } from '../shared/guard';
 import { OpenAIError, startJob } from '../shared/openai';
-import { reviseInput, SYSTEM_PROMPT, type ReviseScope, type TripRequest } from '../shared/prompts';
+import { detailChanges, reviseInput, SYSTEM_PROMPT, type ReviseScope, type TripRequest } from '../shared/prompts';
 
 const handler: Handler = async (event: HandlerEvent) => {
   if (event.httpMethod !== 'POST') return json(405, { error: 'Method not allowed.' });
   const blocked = await guard(event, 'start', Number(process.env.RATE_LIMIT_PER_MIN || 10));
   if (blocked) return blocked;
 
-  let body: TripRequest & { plan?: unknown; scope?: ReviseScope; change?: string };
+  // `previous` holds the trip details before this change, when the person edited them.
+  let body: TripRequest & { plan?: unknown; scope?: ReviseScope; change?: string; previous?: TripRequest };
   try {
     body = JSON.parse(event.body || '{}');
   } catch {
@@ -25,14 +26,16 @@ const handler: Handler = async (event: HandlerEvent) => {
   }
   const change = String(body.change || '').trim();
   const plan = body.plan;
-  const scope: ReviseScope = body.scope === 'all' ? 'all' : Number(body.scope);
-  if (!change) return json(400, { error: 'Please say what should change.' });
+  const detailsChanged = detailChanges(body.previous, body).length > 0;
+  // A change to the trip details always replans the whole trip.
+  const scope: ReviseScope = body.scope === 'all' || detailsChanged ? 'all' : Number(body.scope);
+  if (!change && !detailsChanged) return json(400, { error: 'Please say what should change.' });
   if (!plan || typeof plan !== 'object' || !Array.isArray((plan as any).days)) return json(400, { error: 'Missing the current plan.' });
   if (scope !== 'all' && !(plan as any).days.some((d: any) => d?.day === scope)) return json(400, { error: 'That day is not in the plan.' });
   if (JSON.stringify(plan).length > 200_000) return json(400, { error: 'This plan is too large to change.' });
 
   try {
-    const jobId = await startJob(SYSTEM_PROMPT, reviseInput(body, plan, scope, change));
+    const jobId = await startJob(SYSTEM_PROMPT, reviseInput(body, plan, scope, change, body.previous));
     return json(200, { jobId });
   } catch (err) {
     console.error('Revise start failed:', err);

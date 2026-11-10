@@ -541,3 +541,13 @@ a.tk-place.tk-place { display: inline; }
 .tk-sync.offline { color: var(--accent); }
 .tk-sync.error { color: var(--danger); border-color: rgba(248, 81, 73, 0.4); }
 @media (max-width: 800px) { .header-actions > span:not(.tk-sync) { display: none; } }
+
+/* --- Change sheet: trip details --- */
+.tk-details-toggle { display: flex; align-items: center; gap: 0.4rem; width: 100%; text-align: left; background: #0d1117; border: 1px solid var(--border); color: var(--text); border-radius: var(--radius); padding: 0.6rem 0.8rem; font: inherit; font-size: 0.9rem; cursor: pointer; }
+.tk-details-toggle:hover { border-color: var(--primary); }
+.tk-details-toggle .tk-grow { min-width: 0; }
+.tk-details-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem; }
+.tk-details-grid .field { margin-bottom: 0; }
+.tk-details-grid input, .tk-details-grid select { width: 100%; min-width: 0; }
+select:disabled { opacity: 0.7; }
+.tk-detour { border-color: rgba(248, 81, 73, 0.45); background: rgba(248, 81, 73, 0.08); }

@@ -9,7 +9,7 @@
  */
 
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { type Checks, placeKey, placesIn, routeStops } from './placecheck';
+import { type Checks, detour, placeKey, placesIn, routeStops } from './placecheck';
 
 // Map-check results for the trip on screen, so every place name can show its badge.
 const ChecksContext = createContext<Checks | null>(null);
@@ -103,7 +103,7 @@ export interface SavedTrip {
   packed?: Record<string, boolean>;
   checks?: Checks | null;
   // Earlier versions of the plan, newest first, so a change can be undone.
-  history?: { plan: Plan; checks?: Checks | null; change: string; scope: 'all' | number; at: string }[];
+  history?: { plan: Plan; form?: FormState; checks?: Checks | null; change: string; scope: 'all' | number; at: string }[];
   lastChange?: { note: string; change: string; scope: 'all' | number; at: string } | null;
   wallet?: Wallet;
   updatedAt?: number; // ms since 1970; the newer copy wins when syncing between devices
@@ -225,12 +225,14 @@ const PlaceName = ({ p, fallback }: { p: Place; fallback?: string }) => {
 function MapCheckCard({ trip, progress, onRecheck }: { trip: SavedTrip; progress: { done: number; total: number } | null; onRecheck: () => void }) {
   const c = trip.checks;
   const places = placesIn(trip.plan);
-  if (!places.length && !progress) return null;
+  // Shown when there are places to report on or measured drives (the detour warning needs them).
+  if (!places.length && !progress && !c?.direct) return null;
   const found = places.filter((p) => c?.places[placeKey(p)]?.status === 'found').length;
   const missing = places.filter((p) => c?.places[placeKey(p)]?.status === 'notfound').length;
   const unchecked = places.filter((p) => c?.places[placeKey(p)]?.status === 'unchecked').length;
   // Vague entries ("Check-in and unwind") are skipped, so they don't count either way.
   const checked = found + missing;
+  const longWay = c ? detour(trip.plan, c, trip.form.destination) : null;
   const legs = Object.values(c?.legs || {}).filter(Boolean).length;
   return (
     <div className="card tk-card tk-mapcheck">
@@ -248,6 +250,13 @@ function MapCheckCard({ trip, progress, onRecheck }: { trip: SavedTrip; progress
             {missing === 0 && '.'}
           </p>
           {unchecked > 0 && <p className="tk-small tk-warn-text">{unchecked} couldn't be checked because the map service was busy. Tap Check again in a minute.</p>}
+          {longWay && (
+            <div className="tk-notice tk-detour">
+              <strong>This route takes the long way round.</strong> The drive to {trip.form.destination} adds up to about{' '}
+              {longWay.outboundKm} km, but the direct road from {trip.form.fromLocation} is about {longWay.directKm} km.
+              If that isn't intended, tap <strong>Change</strong> and ask for the direct route.
+            </div>
+          )}
           {legs > 0 && <p className="tk-small">Drives below show the real road distance and pure driving time from {c.routeSource || 'the map'}, without stops or traffic.</p>}
           <button className="btn-secondary tk-link-btn" onClick={onRecheck}>Check again</button>
         </>
