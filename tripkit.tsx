@@ -106,6 +106,7 @@ export interface SavedTrip {
   history?: { plan: Plan; checks?: Checks | null; change: string; scope: 'all' | number; at: string }[];
   lastChange?: { note: string; change: string; scope: 'all' | number; at: string } | null;
   wallet?: Wallet;
+  updatedAt?: number; // ms since 1970; the newer copy wins when syncing between devices
   dateCreated: string;
 }
 
@@ -120,6 +121,7 @@ export interface Profile {
   budgetPerDay: string;
   alwaysCarry: string;
   travellers: { name: string; age: string; food: string; notes: string }[];
+  updatedAt?: number;
 }
 
 // --- STORAGE (this browser only) ---

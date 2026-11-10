@@ -532,3 +532,12 @@ a.tk-place.tk-place { display: inline; }
 .tk-gcal { display: inline-flex; align-items: center; gap: 0.25rem; flex: none; font-size: 0.8rem; color: var(--primary); text-decoration: none; border: 1px solid var(--border); border-radius: 999px; padding: 0.25rem 0.6rem; }
 .tk-gcal .material-symbols-outlined { font-size: 1rem; }
 .tk-gcal:hover { border-color: var(--primary); }
+
+/* --- Sync status --- */
+.tk-sync { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.75rem; font-weight: 600; padding: 0.2rem 0.6rem; border-radius: 999px; border: 1px solid var(--border); color: var(--text-dim); white-space: nowrap; }
+.tk-sync .material-symbols-outlined { font-size: 1rem; }
+.tk-sync.synced { color: var(--success); border-color: rgba(63, 185, 80, 0.4); }
+.tk-sync.saving, .tk-sync.connecting { color: var(--primary); }
+.tk-sync.offline { color: var(--accent); }
+.tk-sync.error { color: var(--danger); border-color: rgba(248, 81, 73, 0.4); }
+@media (max-width: 800px) { .header-actions > span:not(.tk-sync) { display: none; } }

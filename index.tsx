@@ -22,10 +22,13 @@ import {
   getAuth,
   GoogleAuthProvider,
   signInWithPopup,
+  signInWithRedirect,
   signOut,
   onAuthStateChanged,
   type Auth,
 } from 'firebase/auth';
+import { getFirestore, type Firestore } from 'firebase/firestore';
+import { type SyncStatus, useCloudSync } from './sync';
 
 // Mapbox public token (safe to expose; restrict by URL in Mapbox settings).
 const MAPBOX_TOKEN = (import.meta as any).env?.VITE_MAPBOX_TOKEN as string | undefined;
@@ -45,9 +48,12 @@ const firebaseConfig = {
 };
 const firebaseEnabled = Boolean(firebaseConfig.apiKey && firebaseConfig.projectId);
 let auth: Auth | null = null;
+let firestore: Firestore | null = null;
 if (firebaseEnabled) {
   try {
-    auth = getAuth(initializeApp(firebaseConfig));
+    const app = initializeApp(firebaseConfig);
+    auth = getAuth(app);
+    firestore = getFirestore(app);
   } catch (e) {
     console.error('Firebase init failed:', e);
   }
@@ -55,8 +61,13 @@ if (firebaseEnabled) {
 
 interface AppUser {
   name: string;
+  uid?: string; // set when signed in with Google; turns on sync
   getToken?: () => Promise<string | null>;
 }
+
+const SYNC_LABEL: Record<SyncStatus, string> = {
+  off: '', connecting: 'Connecting…', saving: 'Saving…', synced: 'Synced', offline: 'Offline · saved here', error: 'Sync problem',
+};
 
 // --- TYPES ---
 
@@ -397,7 +408,8 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
   }, [showToast]);
 
   // Saves a new or changed trip and keeps the open trip in sync.
-  const upsertTrip = useCallback((t: SavedTrip) => {
+  const upsertTrip = useCallback((changed: SavedTrip) => {
+    const t = { ...changed, updatedAt: Date.now() };
     setArchives((prev) => {
       const next = [t, ...prev.filter((x) => x.id !== t.id)];
       return persistArchives(next) ?? prev;
@@ -410,20 +422,37 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
     setArchives((prev) => {
       const current = prev.find((x) => x.id === id);
       if (!current) return prev;
-      const next = prev.map((x) => (x.id === id ? { ...current, ...patch } : x));
+      const next = prev.map((x) => (x.id === id ? { ...current, ...patch, updatedAt: Date.now() } : x));
       return persistArchives(next) ?? prev;
     });
-    setTrip((cur) => (cur && cur.id === id ? { ...cur, ...patch } : cur));
+    setTrip((cur) => (cur && cur.id === id ? { ...cur, ...patch, updatedAt: Date.now() } : cur));
   }, [persistArchives]);
 
   archivesRef.current = archives;
+
+  // Cloud sync (signed-in users only). Changes from other devices replace local copies here.
+  const replaceArchives = useCallback((fn: (prev: SavedTrip[]) => SavedTrip[]) => {
+    setArchives((prev) => persistArchives(fn(prev)) ?? prev);
+  }, [persistArchives]);
+  const applyProfile = useCallback((p: Profile) => { saveProfile(p); setProfile(p); }, []);
+  const { status: syncStatus, removeTrip } = useCloudSync({
+    db: firestore, uid: user.uid || null, archives, replaceArchives, profile, applyProfile,
+  });
+
+  // Keep the open trip in step with its saved copy: another device may have changed or deleted it.
+  useEffect(() => {
+    if (!trip) return;
+    const saved = archives.find((x) => x.id === trip.id);
+    if (!saved) setTrip(null);
+    else if ((saved.updatedAt || 0) > (trip.updatedAt || 0)) setTrip(saved);
+  }, [archives, trip]);
 
   // Applies `fn` to the latest saved version of a trip (other edits may have landed meanwhile).
   const updateTrip = useCallback((id: string, fn: (t: SavedTrip) => SavedTrip) => {
     setArchives((prev) => {
       const current = prev.find((x) => x.id === id);
       if (!current) return prev;
-      const changed = fn(current);
+      const changed = { ...fn(current), updatedAt: Date.now() };
       const next = prev.map((x) => (x.id === id ? changed : x));
       const saved = persistArchives(next);
       if (saved) setTrip((cur) => (cur && cur.id === id ? changed : cur));
@@ -592,6 +621,7 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
     if (saved) setArchives(saved);
     if (trip?.id === id) setTrip(null);
     setConfirmDelete(null);
+    removeTrip(id);
     showToast('Trip deleted.');
   };
 
@@ -624,6 +654,12 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
           <h1>IntelliTrip</h1>
         </div>
         <div className="header-actions">
+          {syncStatus !== 'off' && (
+            <span className={`tk-sync ${syncStatus}`} title={syncStatus === 'error' ? 'Changes are saved on this device. Sync will retry; check your connection.' : 'Trips sync to your Google account'}>
+              <span className="material-symbols-outlined" aria-hidden="true">{syncStatus === 'synced' ? 'cloud_done' : syncStatus === 'error' ? 'cloud_off' : 'cloud_sync'}</span>
+              {SYNC_LABEL[syncStatus]}
+            </span>
+          )}
           <span>{user.name}</span>
           <button onClick={onLogout} className="btn-icon" aria-label="Log out">
             <span className="material-symbols-outlined" aria-hidden="true">logout</span>
@@ -873,7 +909,10 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
               <button className="btn-secondary" onClick={() => importRef.current?.click()}>Import Trip Kit trips</button>
               <input ref={importRef} type="file" accept=".json,application/json" multiple hidden onChange={(e) => importTripKit(e.target.files)} />
             </div>
-            <p className="tk-dim tk-small">Trips are saved in this browser. To bring in trips from the laptop Trip Kit app, pick their files from <code>C:\Users\kamal\Apps\TripKit\data\trips</code>.</p>
+            <p className="tk-dim tk-small">
+              {user.uid ? 'Trips sync to your Google account and appear on every device you sign in on.' : 'Trips are saved in this browser.'}
+              {' '}To bring in trips from the laptop Trip Kit app, pick their files from <code>C:\Users\kamal\Apps\TripKit\data\trips</code>.
+            </p>
             {archives.length === 0 ? (
               <p className="empty-msg">No journeys preserved yet.</p>
             ) : (
@@ -903,7 +942,7 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
 
         {activeTab === 'toolkit' && (
           <div className="tk-toolkit animate-fade-in">
-            <TravellersCard profile={profile} onSave={(p) => { saveProfile(p); setProfile(p); showToast('Travellers saved.'); }} />
+            <TravellersCard profile={profile} onSave={(p) => { applyProfile({ ...p, updatedAt: Date.now() }); showToast('Travellers saved.'); }} />
             <BookByCard />
             <LeaveCard />
           </div>
@@ -984,7 +1023,16 @@ const LoginPage = ({ onLogin }: { onLogin: (n: string) => void }) => {
       setBusy(true);
       setError(null);
       try {
-        await signInWithPopup(auth, new GoogleAuthProvider());
+        try {
+          await signInWithPopup(auth, new GoogleAuthProvider());
+        } catch (e: any) {
+          // Some phone browsers block pop-ups: sign in on a full page instead.
+          if (e?.code === 'auth/popup-blocked' || e?.code === 'auth/operation-not-supported-in-this-environment') {
+            await signInWithRedirect(auth, new GoogleAuthProvider());
+            return;
+          }
+          throw e;
+        }
         // onAuthStateChanged in <App> handles the transition to the dashboard.
       } catch (e: any) {
         if (e?.code !== 'auth/popup-closed-by-user' && e?.code !== 'auth/cancelled-popup-request') {
@@ -1041,6 +1089,7 @@ const App = () => {
       if (fbUser) {
         setUser({
           name: fbUser.displayName || fbUser.email || 'Explorer',
+          uid: fbUser.uid,
           getToken: () => fbUser.getIdToken(),
         });
         setView('dashboard');
