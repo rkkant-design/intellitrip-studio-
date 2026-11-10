@@ -135,15 +135,16 @@ export function ChangeBanner({
 }
 
 export function ChangeSheet({
-  trip, initialScope, onSubmit, onClose,
+  trip, initialScope, initialText = '', onSubmit, onClose,
 }: {
   trip: SavedTrip;
   initialScope: Scope;
+  initialText?: string;
   onSubmit: (scope: Scope, change: string, newForm: FormState | null) => void;
   onClose: () => void;
 }) {
   const [scope, setScope] = useState<Scope>(initialScope);
-  const [text, setText] = useState('');
+  const [text, setText] = useState(initialText);
   const [form, setForm] = useState<FormState>(trip.form);
   const [showDetails, setShowDetails] = useState(false);
   useEffect(() => {

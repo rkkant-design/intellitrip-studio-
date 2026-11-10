@@ -16,6 +16,7 @@
  */
 
 import type { Place, Plan } from './tripkit';
+import { ROAD_RULES } from './roadrules';
 
 export interface PlaceCheck {
   // skipped: too vague to look up; unchecked: the map service didn't answer.
@@ -30,6 +31,8 @@ export interface LegCheck {
   km: number;
   hours: number;
   source: 'Mapbox' | 'OpenStreetMap';
+  /** Road rules whose area this drive passes through, as fractions (0–1) of the way along it. */
+  hits?: { ruleId: string; enter: number; exit: number }[];
 }
 
 export interface Checks {
@@ -157,7 +160,20 @@ let inCorridor: (p: Point) => boolean = () => true;
 // Places (not towns) must sit close to the trip itself.
 let nearRoute: (p: Point) => boolean = () => true;
 
-const nameLike = (query: string, got: string) => tokens(query).some((a) => tokens(got).some((b) => sameWord(a, b)));
+// Towns with two names in common use; geocoders often know only one (Ooty is "Udhagamandalam").
+const TOWN_ALIASES: string[][] = [
+  ['ooty', 'udhagamandalam', 'ootacamund'], ['bengaluru', 'bangalore'], ['trichy', 'tiruchirappalli', 'tiruchi'],
+  ['pondicherry', 'puducherry', 'pondy'], ['chennai', 'madras'], ['kochi', 'cochin', 'ernakulam'],
+  ['kozhikode', 'calicut'], ['thiruvananthapuram', 'trivandrum'], ['mysuru', 'mysore'], ['mangaluru', 'mangalore'],
+  ['thekkady', 'kumily'], ['kodaikanal', 'kodai'], ['tirunelveli', 'nellai'], ['thoothukudi', 'tuticorin'],
+  ['kanyakumari', 'kanniyakumari'], ['madurai', 'mathurai'], ['coimbatore', 'kovai'], ['alappuzha', 'alleppey'],
+  ['thrissur', 'trichur'], ['palakkad', 'palghat'], ['kollam', 'quilon'], ['tiruvannamalai', 'thiruvannamalai'],
+];
+// Exact match only: close spellings like Trichy and Trichur are different towns.
+const aliasesOf = (word: string) => TOWN_ALIASES.find((g) => g.includes(word)) || [word];
+
+const nameLike = (query: string, got: string) =>
+  tokens(query).some((a) => aliasesOf(a).some((alias) => tokens(got).some((b) => sameWord(alias, b))));
 
 interface Point { lat: number; lon: number; name?: string }
 
@@ -179,10 +195,15 @@ export async function findTown(name: string, fits: (p: Point) => boolean = inCor
   if (!key) return null;
   if (townCache.has(key)) return townCache.get(key)!;
   let point: Point | null = null;
-  const om = await getJson(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(first)}&count=10&language=en&format=json`);
-  for (const r of om?.results || []) {
-    const cand = { lat: r.latitude, lon: r.longitude, name: r.name };
-    if (r.country_code === 'IN' && nameLike(first, r.name) && fits(cand)) { point = cand; break; }
+  // Try the name as written, then its other common names.
+  const spellings = [first, ...aliasesOf(tokens(first)[0] || '').filter((a) => !sameWord(a, tokens(first)[0] || ''))];
+  for (const spelling of spellings) {
+    const om = await getJson(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(spelling)}&count=10&language=en&format=json`);
+    for (const r of om?.results || []) {
+      const cand = { lat: r.latitude, lon: r.longitude, name: r.name };
+      if (r.country_code === 'IN' && nameLike(first, r.name) && fits(cand)) { point = cand; break; }
+    }
+    if (point) break;
   }
   if (!point) {
     // Hill stations are often mapped as an area (a reserve forest, a hill range), not a town.
@@ -247,18 +268,63 @@ async function findPlace(p: Place, kind: Kind, region: Point | null, ignore: str
   return { status: answered ? 'notfound' : 'unchecked' };
 }
 
-/** Road distance and pure driving time through the given points, in order. */
+/**
+ * Where a road's path passes through each road rule's area, as fractions of the way along it.
+ * The path is walked in steps of at most 1 km so sparse (simplified) geometry can't skip a zone.
+ */
+export function ruleHits(path: [number, number][]): { ruleId: string; enter: number; exit: number }[] {
+  if (path.length < 2) return [];
+  const pts: { lat: number; lon: number; at: number }[] = [];
+  let total = 0;
+  for (let i = 0; i < path.length; i++) {
+    const cur = { lat: path[i][1], lon: path[i][0] };
+    if (i === 0) {
+      pts.push({ ...cur, at: 0 });
+      continue;
+    }
+    const prev = { lat: path[i - 1][1], lon: path[i - 1][0] };
+    const seg = km(prev, cur);
+    const steps = Math.max(1, Math.ceil(seg));
+    for (let s = 1; s <= steps; s++) {
+      const f = s / steps;
+      pts.push({ lat: prev.lat + (cur.lat - prev.lat) * f, lon: prev.lon + (cur.lon - prev.lon) * f, at: total + seg * f });
+    }
+    total += seg;
+  }
+  if (!total) return [];
+  const hits: { ruleId: string; enter: number; exit: number }[] = [];
+  for (const rule of ROAD_RULES) {
+    let enter = Infinity;
+    let exit = -Infinity;
+    for (const p of pts) {
+      if (rule.zones.some((z) => km(z, p) <= z.km)) {
+        enter = Math.min(enter, p.at);
+        exit = Math.max(exit, p.at);
+      }
+    }
+    if (enter !== Infinity) hits.push({ ruleId: rule.id, enter: Math.round((enter / total) * 1000) / 1000, exit: Math.round((exit / total) * 1000) / 1000 });
+  }
+  return hits;
+}
+
+/** Road distance, pure driving time and road-rule areas crossed, through the given points in order. */
 async function routeThrough(points: Point[]): Promise<LegCheck | null> {
   if (points.length < 2) return null;
   const coords = points.slice(0, 25).map((p) => `${p.lon.toFixed(5)},${p.lat.toFixed(5)}`).join(';');
+  const shape = (r: any, source: LegCheck['source']): LegCheck => ({
+    km: Math.round(r.distance / 1000),
+    hours: Math.round((r.duration / 3600) * 10) / 10,
+    source,
+    hits: ruleHits(Array.isArray(r.geometry?.coordinates) ? r.geometry.coordinates : []),
+  });
   if (MAPBOX_TOKEN) {
-    const d = await getJson(`https://api.mapbox.com/directions/v5/mapbox/driving/${coords}?overview=false&access_token=${MAPBOX_TOKEN}`);
+    const d = await getJson(`https://api.mapbox.com/directions/v5/mapbox/driving/${coords}?overview=simplified&geometries=geojson&access_token=${MAPBOX_TOKEN}`);
     const r = d?.routes?.[0];
-    if (r) return { km: Math.round(r.distance / 1000), hours: Math.round((r.duration / 3600) * 10) / 10, source: 'Mapbox' };
+    if (r) return shape(r, 'Mapbox');
   }
-  const o = await getJson(`https://router.project-osrm.org/route/v1/driving/${coords}?overview=false`);
+  const o = await getJson(`https://router.project-osrm.org/route/v1/driving/${coords}?overview=simplified&geometries=geojson`);
   const r = o?.routes?.[0];
-  return r ? { km: Math.round(r.distance / 1000), hours: Math.round((r.duration / 3600) * 10) / 10, source: 'OpenStreetMap' } : null;
+  return r ? shape(r, 'OpenStreetMap') : null;
 }
 
 const arr = <T,>(x: T[] | undefined | null): T[] => (Array.isArray(x) ? x : []);

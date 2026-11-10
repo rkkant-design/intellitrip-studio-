@@ -16,6 +16,7 @@ import { checkPlan, placesIn } from './placecheck';
 import { ShareSheet } from './share';
 import { WalletCard } from './wallet';
 import { RemindersCard, RemindersSheet } from './reminders';
+import { RoadRulesCard } from './roadcheck';
 import { type PendingChange, type Scope, ChangeBanner, ChangeSheet, PENDING_CHANGE_KEY, applyChange, needsWholeTrip, undoChange } from './revise';
 import { initializeApp } from 'firebase/app';
 import {
@@ -379,6 +380,8 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
   const [changeScope, setChangeScope] = useState<Scope | null>(null); // the Change sheet is open
   const [pendingChange, setPendingChange] = useState<PendingChange | null>(() => store.get<PendingChange | null>(PENDING_CHANGE_KEY, null));
   const [changeSeconds, setChangeSeconds] = useState(0);
+  const [changeText, setChangeText] = useState('');
+  const [noticesRun, setNoticesRun] = useState<{ tripId: string; seconds: number } | null>(null);
   const archivesRef = useRef<SavedTrip[]>([]);
   const checkingRef = useRef<string | null>(null);
   const importRef = useRef<HTMLInputElement>(null);
@@ -538,9 +541,14 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
     }
   }, [patchTrip, showToast]);
 
-  // Any open trip that has places but no map check yet gets one.
+  // Any open trip that has places or drives but no map check yet gets one. Checks made before
+  // road rules existed lack the road paths' rule areas, so those run once more too.
   useEffect(() => {
-    if (trip && !trip.checks && placesIn(trip.plan).length && !checkingRef.current) runChecks(trip);
+    if (!trip || checkingRef.current) return;
+    const hasDrives = Boolean(trip.plan.roadTrip && typeof trip.plan.roadTrip === 'object' && arr(trip.plan.roadTrip.legs).length);
+    const needsCheck = !trip.checks && (placesIn(trip.plan).length > 0 || hasDrives);
+    const beforeRoadRules = Boolean(trip.checks && Object.values(trip.checks.legs || {}).some((l) => l && !('hits' in l)));
+    if (needsCheck || beforeRoadRules) runChecks(trip);
   }, [trip, runChecks]);
 
   // Follow a plan job until it's ready. Survives tab switches and page reloads via localStorage.
@@ -602,6 +610,28 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
       setPending(next);
     } catch (err: any) {
       setError(err?.message || 'Failed to start. Please try again.');
+    }
+  };
+
+  // Looks up current official road notices for the trip's drives and dates.
+  const checkNotices = async (t: SavedTrip) => {
+    if (noticesRun) return;
+    const startedAt = Date.now();
+    setNoticesRun({ tripId: t.id, seconds: 0 });
+    try {
+      const jobId = await startJob('/api/notices', { ...t.form, profile, plan: t.plan }, await getHeaders());
+      const result = await waitForJob<any>(jobId, getHeaders, startedAt, (s) => setNoticesRun({ tripId: t.id, seconds: s }));
+      patchTrip(t.id, {
+        notices: {
+          checkedAt: new Date().toISOString(),
+          summary: typeof result?.summary === 'string' ? result.summary : '',
+          notices: Array.isArray(result?.notices) ? result.notices.slice(0, 20) : [],
+        },
+      });
+    } catch (err: any) {
+      showToast(err?.message || "Couldn't check road notices.");
+    } finally {
+      setNoticesRun(null);
     }
   };
 
@@ -840,6 +870,11 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
                   checkProgress={checking && checking.tripId === trip.id ? checking : null}
                   onChangeDay={pendingChange ? undefined : (d) => setChangeScope(d)}
                   sidebarSlot={<RemindersCard trip={trip} onOpen={() => setReminding(true)} />}
+                  rulesSlot={
+                    <RoadRulesCard trip={trip} busy={noticesRun && noticesRun.tripId === trip.id ? noticesRun.seconds : null}
+                      onCheckNotices={() => checkNotices(trip)}
+                      onFix={(day, text) => { if (!pendingChange) { setChangeText(text); setChangeScope(day); } }} />
+                  }
                   changeSlot={
                     <ChangeBanner trip={trip} pending={pendingChange} seconds={changeSeconds}
                       onUndo={() => { updateTrip(trip.id, undoChange); showToast('Change undone.'); }}
@@ -964,8 +999,8 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
       {sharing && trip && <ShareSheet trip={trip} onClose={() => setSharing(false)} />}
       {reminding && trip && <RemindersSheet trip={trip} onClose={() => setReminding(false)} />}
       {changeScope !== null && trip && (
-        <ChangeSheet trip={trip} initialScope={changeScope}
-          onSubmit={(scope, change, newForm) => startChange(trip, scope, change, newForm)} onClose={() => setChangeScope(null)} />
+        <ChangeSheet trip={trip} initialScope={changeScope} initialText={changeText}
+          onSubmit={(scope, change, newForm) => startChange(trip, scope, change, newForm)} onClose={() => { setChangeScope(null); setChangeText(''); }} />
       )}
       {toast && <Toast message={toast} />}
     </div>

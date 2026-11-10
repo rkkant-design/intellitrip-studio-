@@ -52,7 +52,7 @@ export function remindersFor(trip: SavedTrip): Reminder[] {
       list.push({ id: 'car-check', title: 'Get the car checked for the trip', date: addDays(start, -7),
         details: `Before ${name}: tyres and spare, brakes, oil, coolant, wipers, AC.` });
       list.push({ id: 'fastag', title: 'Top up FASTag and check car papers', date: addDays(start, -2),
-        details: `Before ${name}: FASTag balance; RC, insurance and PUC valid; download offline maps.` });
+        details: `Before ${name}: FASTag balance; RC, insurance and PUC valid; download offline maps. In IntelliTrip, tap "Check latest road notices" in the Road Rules card.` });
     }
     list.push({ id: 'leave-home', title: 'Leave-home checklist tonight', date: addDays(start, -1),
       details: `Tomorrow: ${name}. Run the leave-home checklist in IntelliTrip's Toolkit tab (gas, water, locks, chargers).` });

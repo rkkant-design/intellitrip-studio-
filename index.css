@@ -551,3 +551,17 @@ a.tk-place.tk-place { display: inline; }
 .tk-details-grid input, .tk-details-grid select { width: 100%; min-width: 0; }
 select:disabled { opacity: 0.7; }
 .tk-detour { border-color: rgba(248, 81, 73, 0.45); background: rgba(248, 81, 73, 0.08); }
+
+/* --- Road Rules --- */
+.tk-roadrules { border-color: rgba(88, 166, 255, 0.35); }
+.tk-rule { display: flex; flex-direction: column; gap: 0.35rem; padding: 0.8rem 0.9rem; border-radius: var(--radius); border: 1px solid var(--border); border-left-width: 4px; }
+.tk-rule.blocker { border-left-color: var(--danger); background: rgba(248, 81, 73, 0.07); }
+.tk-rule.warning { border-left-color: var(--accent); background: rgba(242, 204, 96, 0.06); }
+.tk-rule.todo { border-left-color: var(--accent); }
+.tk-rule.caution { border-left-color: var(--primary); }
+.tk-rule.ok { border-left-color: var(--success); }
+.tk-chip.rule-blocker { background: var(--danger); color: #fff; border-color: transparent; }
+.tk-chip.rule-warning, .tk-chip.rule-todo { background: var(--accent); color: #000; border-color: transparent; }
+.tk-chip.rule-caution { color: var(--primary); border-color: rgba(88, 166, 255, 0.5); }
+.tk-chip.rule-ok { color: var(--success); border-color: rgba(63, 185, 80, 0.5); }
+.tk-rule-links { gap: 0.6rem; align-items: center; }

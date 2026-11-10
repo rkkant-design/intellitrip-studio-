@@ -38,13 +38,13 @@ async function request(method: string, path: string, body?: unknown) {
   return data;
 }
 
-/** Starts a background job and returns its response id. */
-export async function startJob(instructions: string, input: string): Promise<string> {
+/** Starts a background job and returns its response id. `maxSearches` caps web searches for quick lookups. */
+export async function startJob(instructions: string, input: string, opts: { maxSearches?: number } = {}): Promise<string> {
   const base: Record<string, unknown> = { model: MODEL, instructions, input, background: true };
   // Optional speed limits; dropped one by one if this model or account rejects them.
   const extras: Record<string, unknown> = {};
   if (MODEL.startsWith('gpt-5') || /^o\d/.test(MODEL)) extras.reasoning = { effort: REASONING_EFFORT };
-  if (WEB_SEARCH) extras.max_tool_calls = MAX_SEARCHES;
+  if (WEB_SEARCH) extras.max_tool_calls = Math.min(MAX_SEARCHES, opts.maxSearches ?? MAX_SEARCHES);
   const toolOptions: (unknown[] | null)[] = WEB_SEARCH
     ? [[{ type: 'web_search' }], [{ type: 'web_search_preview' }], null]
     : [null];

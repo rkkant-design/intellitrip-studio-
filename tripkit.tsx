@@ -94,6 +94,22 @@ export interface Wallet {
   expenses?: Expense[];
 }
 
+/** Current road notices for the trip's route and dates, found by the AI with web search. */
+export interface RoadNotices {
+  checkedAt: string;
+  summary?: string;
+  notices: {
+    title?: string;
+    area?: string;
+    when?: string;
+    timeWindow?: string;
+    severity?: 'blocker' | 'caution' | 'info';
+    whatToDo?: string;
+    sourceTitle?: string;
+    sourceUrl?: string;
+  }[];
+}
+
 export interface SavedTrip {
   id: string;
   form: FormState;
@@ -106,6 +122,7 @@ export interface SavedTrip {
   history?: { plan: Plan; form?: FormState; checks?: Checks | null; change: string; scope: 'all' | number; at: string }[];
   lastChange?: { note: string; change: string; scope: 'all' | number; at: string } | null;
   wallet?: Wallet;
+  notices?: RoadNotices | null;
   updatedAt?: number; // ms since 1970; the newer copy wins when syncing between devices
   dateCreated: string;
 }
@@ -225,8 +242,9 @@ const PlaceName = ({ p, fallback }: { p: Place; fallback?: string }) => {
 function MapCheckCard({ trip, progress, onRecheck }: { trip: SavedTrip; progress: { done: number; total: number } | null; onRecheck: () => void }) {
   const c = trip.checks;
   const places = placesIn(trip.plan);
-  // Shown when there are places to report on or measured drives (the detour warning needs them).
-  if (!places.length && !progress && !c?.direct) return null;
+  // Shown when there are places to report on or drives to measure (distances, road rules, detours).
+  const hasDrives = Boolean(trip.plan.roadTrip && typeof trip.plan.roadTrip === 'object' && arr(trip.plan.roadTrip.legs).length);
+  if (!places.length && !progress && !hasDrives) return null;
   const found = places.filter((p) => c?.places[placeKey(p)]?.status === 'found').length;
   const missing = places.filter((p) => c?.places[placeKey(p)]?.status === 'notfound').length;
   const unchecked = places.filter((p) => c?.places[placeKey(p)]?.status === 'unchecked').length;
@@ -615,11 +633,12 @@ export function PackingCard({
 }
 
 export function PlanView({
-  trip, packingSlot, changeSlot, sidebarSlot, checkProgress, onRecheck, onChangeDay,
+  trip, packingSlot, changeSlot, rulesSlot, sidebarSlot, checkProgress, onRecheck, onChangeDay,
 }: {
   trip: SavedTrip;
   packingSlot: React.ReactNode;
   changeSlot?: React.ReactNode;
+  rulesSlot?: React.ReactNode;
   sidebarSlot?: React.ReactNode;
   checkProgress: { done: number; total: number } | null;
   onRecheck: () => void;
@@ -634,6 +653,7 @@ export function PlanView({
       <div className="itinerary-list">
         {changeSlot}
         <MapCheckCard trip={trip} progress={checkProgress} onRecheck={onRecheck} />
+        {rulesSlot}
         {(p.weather || arr(p.alerts).length > 0) && (
           <div className="card tk-card">
             <h3 className="tk-h3"><span className="material-symbols-outlined" aria-hidden="true">partly_cloudy_day</span>Weather & Alerts</h3>

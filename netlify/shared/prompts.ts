@@ -7,6 +7,8 @@
  * IntelliTrip's day cards (themes, hero moments, live alerts, a stay pick).
  */
 
+import { ROAD_RULES_FOR_PROMPT } from '../../roadrules';
+
 export const SYSTEM_PROMPT = `You are IntelliTrip, a careful travel planner for a family based in India.
 Rules:
 - Plan realistic days: count travel time, check-in/check-out, meal breaks, and the pace of the youngest and oldest traveller. At most 3 main activities a day.
@@ -20,6 +22,8 @@ Rules:
 - Restaurants and food stops must be specific, currently operating places you found in your search, with their real branch location. Never list a chain branch you have not confirmed in that town, and never use a bus stand, a generic "local bakery" or "any fuel bunk" as a food stop. If unsure whether one is still open, say "check it's open".
 - Every stop, food stop and hidden gem must be one specific, named place someone can type into Google Maps. Never write a placeholder such as "quiet roadside viewpoint near X", "highway stalls", "a local bakery" or "fuel top-up (optional)"; put general fuel advice in tips instead. On long highway stretches, look for real lesser-known places within a short detour of the route; if you find none, list fewer stops rather than inventing one.
 - Do not put links or citations inside the JSON text fields; list them only under "sources".
+- Known road rules in South India. Plan every drive to respect them (time forest stretches for daylight, add e-passes to bookBy, use the stated detours):
+${ROAD_RULES_FOR_PROMPT}
 - Reply with ONE JSON object only, no prose before or after it.`;
 
 export const PLAN_SCHEMA = `Return JSON with exactly these keys:
@@ -191,5 +195,56 @@ export function reviseInput(req: TripRequest, plan: unknown, scope: ReviseScope,
     scope === 'all' ? '' : `Change day ${scope} and, only if needed, its road-trip leg and the budget. Do not return other days.`,
     '',
     scope === 'all' ? REVISE_TRIP_SCHEMA : REVISE_DAY_SCHEMA,
+  ].join('\n');
+}
+
+
+// --- Current road notices for a planned trip ---
+
+export const NOTICES_SCHEMA = `Return JSON with exactly these keys:
+{
+ "summary": "one sentence: is the planned driving likely to go ahead as planned?",
+ "notices": [{
+   "title": "short name of the restriction, e.g. 'Night traffic ban, Idukki hill roads'",
+   "area": "road or district it covers",
+   "when": "dates it applies, or 'ongoing'",
+   "timeWindow": "hours it applies, e.g. '7 pm to 6 am', or ''",
+   "severity": "blocker if it would stop or close part of the planned drive at the planned time; caution if it might (weather alerts, permits to check); info otherwise",
+   "whatToDo": "the practical step for this family",
+   "sourceTitle": "", "sourceUrl": ""
+ }]
+}`;
+
+export const NOTICES_RULES = `Search for road restrictions that affect the drives listed below on these dates: forest night traffic bans,
+ghat or road closures, landslide or flood closures, district collector orders, e-pass or permit requirements, tourist-vehicle bans,
+checkpost timings, and weather alerts (IMD orange or red) for the districts on the route.
+Include only items backed by an official source (government, police, forest department, district administration, IMD) or a dated
+news report from the last 60 days, plus standing rules that are still in force. Never invent a restriction. If you find nothing
+that applies, return an empty "notices" list and say so in "summary". Every notice needs a sourceUrl.`;
+
+/** What the model needs to look up notices: where they drive, on which days, and at what times. */
+export function noticesInput(req: TripRequest, plan: any): string {
+  const legs = Array.isArray(plan?.roadTrip?.legs) ? plan.roadTrip.legs : [];
+  const nights = Math.max(1, Math.min(30, Number(req.duration) || 1));
+  const start = clip(req.startDate, 10);
+  const drives = legs.slice(0, 12).map((l: any, i: number) => {
+    const day = Number(l?.day) || i + 1;
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(start) ? endDate(start, day - 1) : '';
+    const stops = (Array.isArray(l?.stops) ? l.stops : []).slice(0, 8).map((s: any) => clip(s?.name, 60)).filter(Boolean).join(', ');
+    return `Day ${day}${date ? ` (${date})` : ''}: ${clip(l?.from, 60)} → ${clip(l?.to, 60)} via ${clip(l?.route, 120) || 'the planned route'}${stops ? `; stops: ${stops}` : ''}; about ${clip(l?.driveTime, 30)}`;
+  });
+  return [
+    `Today is ${new Date().toISOString().slice(0, 10)}.`,
+    `Trip: ${clip(req.fromLocation, 80)} → ${clip(req.destination, 120)}, ${start} to ${endDate(start, nights)}, ${clip(req.mode, 60) || 'road trip in their own car'}.`,
+    `Departure on day 1: ${clip(plan?.roadTrip?.departAt, 160) || 'not stated'}.`,
+    'Drives:',
+    ...(drives.length ? drives : ['(no drives listed; check the destination and the roads into it)']),
+    '',
+    'These known rules are already shown to the family; report them only if their current status or timings differ:',
+    ROAD_RULES_FOR_PROMPT,
+    '',
+    NOTICES_RULES,
+    '',
+    NOTICES_SCHEMA,
   ].join('\n');
 }
