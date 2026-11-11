@@ -181,8 +181,8 @@ export const store = {
 };
 
 export const DEFAULT_PROFILE: Profile = {
-  homeCity: 'Chennai', vehicle: '', fuelType: 'Petrol', mileage: '', fuelPrice: '', pace: 'Balanced', food: '', budgetPerDay: '', alwaysCarry: '',
-  travellers: [{ name: 'Kamal', age: '43', food: '', notes: '' }],
+  homeCity: '', vehicle: '', fuelType: 'Petrol', mileage: '', fuelPrice: '', pace: 'Balanced', food: '', budgetPerDay: '', alwaysCarry: '',
+  travellers: [{ name: '', age: '', food: '', notes: '' }],
 };
 export const loadProfile = (): Profile => ({ ...DEFAULT_PROFILE, ...store.get<Partial<Profile>>(PROFILE_KEY, {}) });
 export const saveProfile = (p: Profile) => store.set(PROFILE_KEY, p);

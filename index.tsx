@@ -845,13 +845,9 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void; onSample: () =>
           <div className="archives-view animate-fade-in">
             <div className="tk-archive-head">
               <h2>My trips</h2>
-              <button className="btn-secondary" onClick={() => importRef.current?.click()}>Import laptop trips</button>
+              <button className="btn-secondary" onClick={() => importRef.current?.click()}>Import trip files</button>
               <input ref={importRef} type="file" accept=".json,application/json" multiple hidden onChange={(e) => importTripKit(e.target.files)} />
             </div>
-            <p className="tk-dim tk-small">
-              {user.uid ? 'Trips sync to your Google account and appear on every device you sign in on.' : 'Trips are saved in this browser.'}
-              {' '}To bring in trips from the laptop Trip Kit app, pick their files from <code>C:\Users\kamal\Apps\TripKit\data\trips</code>.
-            </p>
             {archives.length === 0 ? (
               <p className="empty-msg">No trips yet. Plan one and it's saved here.</p>
             ) : (
@@ -997,7 +993,7 @@ const LoginPage = ({ onLogin, onBack, onSample }: { onLogin: (n: string) => void
             <>
               <div className="field">
                 <label htmlFor="explorerName">Your name</label>
-                <input id="explorerName" autoFocus placeholder="e.g. Kamal" value={name}
+                <input id="explorerName" autoFocus placeholder="Your name" value={name}
                   onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && onLogin(name.trim() || 'Traveller')} />
               </div>
               <button className="btn-primary" onClick={() => onLogin(name.trim() || 'Traveller')}>Continue</button>

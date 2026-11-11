@@ -117,7 +117,7 @@ export function tripContext(req: TripRequest): string {
   }));
   return [
     `Today is ${new Date().toISOString().slice(0, 10)}.`,
-    `Starting from: ${clip(req.fromLocation, 80) || clip(p.homeCity, 80) || 'Chennai'}`,
+    `Starting from: ${clip(req.fromLocation, 80) || clip(p.homeCity, 80) || 'not given'}`,
     `Destination: ${clip(req.destination, 120)}`,
     `Dates: ${start} to ${endDate(start, nights)} (${nights} nights, ${nights + 1} days)`,
     `Travellers on THIS trip: ${Number(req.adults) || 1} adults, ${Number(req.children) || 0} children (this overrides the usual group for counts and quantities)`,
