@@ -113,7 +113,7 @@ export function TodayView({ trip, onChange, by, weatherSlot, onOpenPlan }: {
   trip: SavedTrip;
   onChange: (t: SavedTrip) => void;
   by?: string;
-  weatherSlot?: (place: string) => React.ReactNode;
+  weatherSlot?: (place: string, date: string) => React.ReactNode;
   onOpenPlan: () => void;
 }) {
   const total = tripDays(trip);
@@ -206,7 +206,9 @@ export function TodayView({ trip, onChange, by, weatherSlot, onOpenPlan }: {
             <span className={`tk-chip rule-${f.level}`}>{LEVEL_LABEL[f.level]}</span>
             <strong>{f.rule.name}</strong>
           </div>
-          {f.leaveBy ? <div><strong>Leave by {f.leaveBy}</strong> to clear it before it shuts.</div> : <div className="tk-small">{f.detail}</div>}
+          {f.leaveBy ? <div><strong>Leave by {f.leaveBy}</strong> to clear it before it shuts.</div>
+            : f.leaveAfter ? <div><strong>Leave after {f.leaveAfter}</strong> so you reach it once it has opened.</div>
+            : <div className="tk-small">{f.detail}</div>}
           {f.rule.link && <a className="tk-gcal" href={f.rule.link.url} target="_blank" rel="noopener noreferrer">{f.rule.link.label}</a>}
         </div>
       ))}
@@ -312,7 +314,7 @@ export function TodayView({ trip, onChange, by, weatherSlot, onOpenPlan }: {
             <p className="tk-small">{added ? <span className="tk-ok-text" role="status">{added}</span> : <>Spent on day {day}: <strong className="tk-mono">{formatINR(spentToday)}</strong></>}</p>
             <button className="btn-secondary tk-link-btn" onClick={onOpenPlan}>Full plan, packing and wallet</button>
           </div>
-          {weatherSlot?.(place)}
+          {weatherSlot?.(place, date)}
         </div>
       </div>
 

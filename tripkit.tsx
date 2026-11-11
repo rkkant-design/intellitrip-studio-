@@ -215,10 +215,35 @@ export const fuelUnits = (fuelType?: string) =>
     : { unit: 'litre', mileage: 'km per litre' };
 
 export const arr = <T,>(x: T[] | undefined | null): T[] => (Array.isArray(x) ? x : []);
+
+/** An https link that's safe to open, or undefined. Links in plans come from the AI and web pages. */
+export const safeUrl = (u?: string) => {
+  try {
+    const url = new URL(String(u || ''));
+    return url.protocol === 'https:' ? url.toString() : undefined;
+  } catch {
+    return undefined;
+  }
+};
 export const formatINR = (n: number | undefined | null): string => `₹${Math.round(Number(n ?? 0)).toLocaleString('en-IN')}`;
 const ymd = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 export const todayStr = () => ymd(new Date());
 export const addDays = (s: string, n: number) => { const d = new Date(s + 'T00:00:00'); d.setDate(d.getDate() + n); return ymd(d); };
+/** What's wrong with a trip's details, in words for the person, or null when they're fine. */
+export function tripDetailsProblem(f: FormState, opts: { allowPastStart?: boolean } = {}): string | null {
+  if (!String(f.fromLocation || '').trim() || !String(f.destination || '').trim() || !f.startDate) return 'Please fill in From, To and Start date.';
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(f.startDate)) return 'Please pick a start date.';
+  if (!opts.allowPastStart && f.startDate < todayStr()) return "The start date is in the past. Pick today or a later date.";
+  const nights = Number(f.duration);
+  if (!Number.isInteger(nights) || nights < 1) return 'Please enter at least 1 night.';
+  if (nights > 30) return 'Trips can be up to 30 nights. For longer, plan it in two parts.';
+  const adults = Number(f.adults);
+  if (!Number.isInteger(adults) || adults < 1) return 'At least 1 adult needs to travel.';
+  const children = Number(f.children);
+  if (!Number.isInteger(children) || children < 0 || children > 20) return 'Children should be a number from 0 to 20.';
+  return null;
+}
+
 export const endDateOf = (f: FormState) => addDays(f.startDate, Math.max(1, Number(f.duration) || 1));
 export const fmtDate = (s?: string) =>
   s && /^\d{4}-\d{2}-\d{2}$/.test(s) ? new Date(s + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : s || '';
@@ -354,7 +379,7 @@ export async function waitForJob<T>(
   const waitingSince = Date.now();
   let first = true;
   for (;;) {
-    if (!first) await sleep(4000);
+    if (!first) await sleep(Date.now() - waitingSince < 60_000 ? 4000 : 8000);
     first = false;
     if (isCancelled?.()) throw new Error('cancelled');
     const elapsed = Math.round((Date.now() - startedAt) / 1000);
@@ -420,7 +445,8 @@ export function fromTripKit(t: any): SavedTrip {
   if (!t || typeof t !== 'object' || !t.destination || !Array.isArray(t.days)) throw new Error('Not a Trip Kit trip file.');
   const form: FormState = {
     ...emptyForm(DEFAULT_PROFILE),
-    fromLocation: 'Chennai', destination: t.destination, startDate: t.start || '', duration: nightsBetween(t.start, t.end),
+    // Where the trip file says it starts; the person can fix it with Change if it's missing.
+    fromLocation: String(arr<any>(t.roadTrip?.legs)[0]?.from || t.from || '').trim(), destination: t.destination, startDate: t.start || '', duration: nightsBetween(t.start, t.end),
     mode: t.mode || 'Road trip in our own car', maxDrive: t.maxDrive || '5 hours', budget: t.budgetBand || 'Mid-range',
     food: t.food || '', idealTripDescription: t.notes || '', travelType: 'Family',
   };
@@ -437,7 +463,7 @@ export function fromTripKit(t: any): SavedTrip {
     })),
   };
   return {
-    id: `tk-${t.id || Date.now()}`, form, plan, packing: t.packing ?? null, packed: t.packed ?? {},
+    id: `tk-${t.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`}`, form, plan, packing: t.packing ?? null, packed: t.packed ?? {},
     dateCreated: t.savedAt ? new Date(t.savedAt).toLocaleDateString() : new Date().toLocaleDateString(),
   };
 }
@@ -749,7 +775,7 @@ export function PlanView({
             <h3>Book By</h3>
             {arr(p.bookBy).map((b, i) => (
               <BookRow key={i} item={b.item} deadline={b.deadline}
-                sub={[b.opens && b.opens !== 'now' ? `Opens ${fmtDate(b.opens)}` : 'Open now', b.where, b.note].filter(Boolean).join(' · ')} />
+                sub={[/^now$/i.test(String(b.opens || '').trim()) ? 'Open now' : b.opens ? `Opens ${fmtDate(b.opens)}` : 'Opening date not given', b.where, b.note].filter(Boolean).join(' · ')} />
             ))}
           </div>
         )}
@@ -769,7 +795,7 @@ export function PlanView({
             <h3>Sources</h3>
             <ul className="tk-list tk-small">
               {arr(p.sources).map((s, i) => (
-                <li key={i}><a className="tk-place" href={s.url} target="_blank" rel="noopener noreferrer">{s.title || s.url}</a></li>
+                <li key={i}>{safeUrl(s.url) ? <a className="tk-place" href={safeUrl(s.url)} target="_blank" rel="noopener noreferrer">{s.title || s.url}</a> : <span>{s.title}</span>}</li>
               ))}
             </ul>
           </div>

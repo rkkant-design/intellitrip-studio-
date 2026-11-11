@@ -63,6 +63,9 @@ const handler: Handler = async (event: HandlerEvent) => {
     const parsed = extractJson(text);
     const listed = parsed.sources;
     const result = cleanText(parsed);
+    if (!result || typeof result !== 'object' || Array.isArray(result)) throw new Error('not an object');
+    if ('days' in result && !Array.isArray(result.days)) throw new Error('days is not a list');
+    if ('groups' in result && !Array.isArray(result.groups)) throw new Error('groups is not a list');
     if ('days' in result || 'summary' in result) result.sources = mergeSources(listed, cited);
     return json(200, { status: 'done', result });
   } catch (err) {

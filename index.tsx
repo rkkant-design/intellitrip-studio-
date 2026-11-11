@@ -8,7 +8,7 @@ import { createRoot } from 'react-dom/client';
 import {
   type FormState, type Profile, type SavedTrip, type Packing, type Plan,
   BookByCard, LeaveCard, PackingCard, PENDING_KEY, PlanView, STORAGE_KEY, TravellersCard,
-  claimDevice, emptyForm, fromTripKit, loadProfile, mmss, normaliseSaved, saveProfile, startJob, store, waitForJob, arr, endDateOf,
+  claimDevice, tripDetailsProblem, todayStr, emptyForm, fromTripKit, loadProfile, mmss, normaliseSaved, saveProfile, startJob, store, waitForJob, arr, endDateOf,
 } from './tripkit';
 import { type Checks, checkPlan, placesIn } from './placecheck';
 import { ShareSheet } from './share';
@@ -183,7 +183,8 @@ const describeWeather = (code: number) => WMO[code] ?? { icon: '🌡️', label:
 const dayLabel = (iso: string) =>
   new Date(iso + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' });
 
-const WeatherTracker = ({ destination }: { destination: string }) => {
+/** `focusDate` (YYYY-MM-DD) shows that day's forecast up top, e.g. when Today previews a later trip day. */
+const WeatherTracker = ({ destination, focusDate }: { destination: string; focusDate?: string }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [place, setPlace] = useState<string>('');
@@ -236,7 +237,9 @@ const WeatherTracker = ({ destination }: { destination: string }) => {
     };
   }, [destination]);
 
-  const today = days[0];
+  const focus = focusDate ? days.find((d) => d.date === focusDate) : undefined;
+  const today = focus || days[0];
+  const later = Boolean(focusDate && days.length && focusDate > days[0].date);
 
   return (
     <div className="card weather-card">
@@ -268,7 +271,9 @@ const WeatherTracker = ({ destination }: { destination: string }) => {
               </div>
             ))}
           </div>
-          <p className="weather-note">7-day outlook (needs signal).</p>
+          <p className="weather-note">
+            {later && !focus ? `The forecast for ${dayLabel(focusDate!)} isn't out yet; this is today's. ` : focus && later ? `Showing ${dayLabel(focusDate!)}. ` : ''}7-day outlook (needs signal).
+          </p>
         </>
       )}
     </div>
@@ -277,7 +282,7 @@ const WeatherTracker = ({ destination }: { destination: string }) => {
 
 // --- MAIN DASHBOARD ---
 
-const Dashboard: React.FC<{ user: AppUser; onLogout: () => void; onSample: () => void }> = ({ user, onLogout, onSample }) => {
+const Dashboard: React.FC<{ user: AppUser; onLogout: () => void; onSample: () => void }> = ({ user, onLogout: signOutNow, onSample }) => {
   // A trip happening today opens straight into Today mode.
   const [activeTab, setActiveTab] = useState<ActiveTab>(() => (tripToday(loadArchives()) ? 'today' : 'planner'));
   const [todayId, setTodayId] = useState<string | null>(() => tripToday(loadArchives())?.id ?? null);
@@ -304,6 +309,18 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void; onSample: () =>
   const checkingRef = useRef<string | null>(null);
   const importRef = useRef<HTMLInputElement>(null);
 
+  // Signing out stops any AI job still running for this person, so it isn't billed for nobody.
+  const onLogout = async () => {
+    const headers = await getHeadersRef.current?.().catch(() => null);
+    for (const job of [store.get<PendingPlan | null>(PENDING_KEY, null)?.jobId, store.get<PendingChange | null>(PENDING_CHANGE_KEY, null)?.jobId]) {
+      if (job && headers) fetch(`/api/job?id=${encodeURIComponent(job)}&cancel=1`, { method: 'POST', headers }).catch(() => undefined);
+    }
+    store.set(PENDING_KEY, null);
+    store.set(PENDING_CHANGE_KEY, null);
+    signOutNow();
+  };
+  const getHeadersRef = useRef<(() => Promise<Record<string, string>>) | null>(null);
+
   const showToast = useCallback((message: string) => {
     setToast(message);
     setTimeout(() => setToast(null), 2800);
@@ -317,6 +334,8 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void; onSample: () =>
     }
     return headers;
   }, [user]);
+
+  getHeadersRef.current = getHeaders;
 
   const persistArchives = useCallback((updated: SavedTrip[]) => {
     // Base64 hero images from older trips are large; if we hit the storage quota,
@@ -372,7 +391,7 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void; onSample: () =>
     }
     store.set(JOIN_KEY, null);
     joinTrip(join.id, join.code)
-      .then(() => { openWhenArrives.current = join.id; showToast('You joined the trip. It syncs to your phone now.'); })
+      .then((how) => { openWhenArrives.current = join.id; showToast(how === 'member' ? "You're already on this trip." : 'You joined the trip. It syncs to your phone now.'); })
       .catch((e: Error) => showToast(e.message));
   }, [user.uid, joinTrip, showToast]);
   useEffect(() => {
@@ -411,6 +430,7 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void; onSample: () =>
   // `newForm` is set when the person edited the trip details; the AI then replans the whole trip for them.
   const startChange = async (t: SavedTrip, scope: Scope, change: string, newForm: FormState | null = null) => {
     setChangeScope(null);
+    setChangeText('');
     try {
       const details = newForm || t.form;
       const body = { ...details, profile, plan: t.plan, scope: newForm ? 'all' : scope, change, previous: newForm ? t.form : undefined };
@@ -529,7 +549,8 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void; onSample: () =>
         };
         upsertTrip(saved);
         setTrip(saved);
-        setActiveTab('planner');
+        // Someone using Today on the road stays there; the toast says the new trip is ready.
+        setActiveTab((tab) => (tab === 'today' ? tab : 'planner'));
         showToast('Your trip is ready and saved to My trips.');
       })
       .catch((err: Error) => {
@@ -553,13 +574,9 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void; onSample: () =>
   };
 
   const generateItinerary = async () => {
-    const duration = Number(form.duration);
-    if (!form.destination.trim() || !form.fromLocation.trim() || !form.startDate) {
-      setError('Please fill in From, To and Start date.');
-      return;
-    }
-    if (!duration || duration < 1) {
-      setError('Please enter at least 1 night.');
+    const problem = tripDetailsProblem(form);
+    if (problem) {
+      setError(problem);
       return;
     }
     setError(null);
@@ -688,7 +705,7 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void; onSample: () =>
                   </div>
                   <div className="field">
                     <label htmlFor="startDate">Start date</label>
-                    <input id="startDate" type="date" name="startDate" value={form.startDate} onChange={handleInputChange} />
+                    <input id="startDate" type="date" name="startDate" min={todayStr()} value={form.startDate} onChange={handleInputChange} />
                   </div>
                   <div className="field">
                     <label htmlFor="duration">Nights</label>
@@ -696,11 +713,11 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void; onSample: () =>
                   </div>
                   <div className="field">
                     <label htmlFor="adults">Adults</label>
-                    <input id="adults" type="number" inputMode="numeric" name="adults" value={form.adults} onChange={handleInputChange} min="1" />
+                    <input id="adults" type="number" inputMode="numeric" name="adults" value={form.adults} onChange={handleInputChange} min="1" max="20" />
                   </div>
                   <div className="field">
                     <label htmlFor="children">Children</label>
-                    <input id="children" type="number" inputMode="numeric" name="children" value={form.children} onChange={handleInputChange} min="0" />
+                    <input id="children" type="number" inputMode="numeric" name="children" value={form.children} onChange={handleInputChange} min="0" max="20" />
                   </div>
                   <div className="field">
                     <label htmlFor="mode">How you're travelling</label>
@@ -833,7 +850,7 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void; onSample: () =>
         {activeTab === 'today' && (
           todayTrip ? (
             <TodayView trip={todayTrip} onChange={upsertTrip} by={firstName}
-              weatherSlot={(place) => <WeatherTracker destination={place} />}
+              weatherSlot={(place, date) => <WeatherTracker destination={place} focusDate={date} />}
               onOpenPlan={() => openArchived(todayTrip)} />
           ) : (
             <div className="card tk-card today-empty animate-fade-in">

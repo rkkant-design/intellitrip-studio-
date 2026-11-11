@@ -6,7 +6,7 @@
  * Trips themselves live in the browser's storage, so they need nothing here.
  * AI calls (/api/*), sign-in, sync and map tiles always go to the network.
  */
-const CACHE = 'intellitrip-v1';
+const CACHE = 'intellitrip-v2';
 const SHELL = ['/', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon-512.png', '/icons/favicon-32.png'];
 const FONT_HOSTS = ['fonts.googleapis.com', 'fonts.gstatic.com'];
 
@@ -57,13 +57,22 @@ self.addEventListener('fetch', (event) => {
   if (url.origin === self.location.origin) {
     if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/.netlify/') || url.pathname.startsWith('/__/')) return;
     if (req.mode === 'navigate') {
+      // Network first, but on weak signal ("lie-fi") don't make people wait: after 3.5 s the saved
+      // copy opens, and the fresh one still updates the cache in the background.
       event.respondWith((async () => {
-        try {
-          const r = await fetch(req);
+        const network = fetch(req).then((r) => {
           if (r.ok && (r.headers.get('content-type') || '').includes('text/html')) event.waitUntil(saveShell(r.clone()));
           return r;
+        });
+        event.waitUntil(network.catch(() => undefined));
+        const saved = caches.match('/');
+        const slow = new Promise((resolve) => setTimeout(resolve, 3500, 'slow'));
+        try {
+          const first = await Promise.race([network, slow]);
+          if (first !== 'slow') return first;
+          return (await saved) || (await network);
         } catch {
-          return (await caches.match('/')) || Response.error();
+          return (await saved) || Response.error();
         }
       })());
       return;

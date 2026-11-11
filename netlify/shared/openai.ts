@@ -137,7 +137,7 @@ export function mergeSources(listed: unknown, cited: { title: string; url: strin
   const out: { title: string; url: string }[] = [];
   const seen = new Set<string>();
   for (const s of [...(Array.isArray(listed) ? listed : []), ...cited] as any[]) {
-    if (!s || typeof s !== 'object' || !s.url) continue;
+    if (!s || typeof s !== 'object' || !s.url || !/^https:\/\//i.test(String(s.url))) continue;
     const url = tidyUrl(String(s.url));
     if (seen.has(url)) continue;
     seen.add(url);

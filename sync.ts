@@ -87,6 +87,26 @@ export function mergeTrips(local: SavedTrip[], remote: RemoteTrip[]): SavedTrip[
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 
+// A short fingerprint of a value (FNV-1a over its JSON), so merge bases needn't store whole plans.
+const hashOf = (text: string) => {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 0x01000193);
+  return `${(h >>> 0).toString(36)}.${text.length}`;
+};
+const fp = (v: unknown) => (v && typeof v === 'object' && '__h' in (v as any) ? (v as any).__h : hashOf(JSON.stringify(v ?? null)));
+// Fields merged item by item keep their values; everything else is stored as a fingerprint.
+const MERGED_IN_FULL = new Set(['packed', 'today', 'wallet']);
+
+/** The copy of a shared trip kept as the merge base: small, and stamped with the cloud version it is. */
+export function compactBase(t: SavedTrip, version: number): SavedTrip {
+  const out: Record<string, unknown> = { id: t.id, cloudAt: version };
+  for (const [k, v] of Object.entries(t)) {
+    if (k === 'id' || k === 'cloudAt' || k === 'share' || k === 'vibeImage' || k === 'updatedAt') continue;
+    out[k] = MERGED_IN_FULL.has(k) ? v : { __h: fp(v) };
+  }
+  return out as unknown as SavedTrip;
+}
+
 /** Tick-style maps (packing, Today's done list): each key merged on its own. */
 function mergeFlags(base: Record<string, boolean> | undefined, mine: Record<string, boolean> | undefined, theirs: Record<string, boolean> | undefined) {
   const out: Record<string, boolean> = {};
@@ -139,8 +159,8 @@ export function merge3(base: SavedTrip | undefined, mine: SavedTrip, theirs: Sav
     const b = (theirs as any)[k];
     if (same(a, b)) continue;
     const o = base ? (base as any)[k] : undefined;
-    if (base && same(a, o)) { out[k] = b; continue; }
-    if (base && same(b, o)) continue;
+    if (base && fp(a) === fp(o)) { out[k] = b; continue; }
+    if (base && fp(b) === fp(o)) continue;
     if (k === 'packed' || k === 'today') out[k] = mergeFlags(o, a, b);
     else if (k === 'wallet') out[k] = mergeWallet(o, a, b);
   }
@@ -216,9 +236,27 @@ export const inviteLink = (t: SavedTrip) =>
 /** Reads `?join=<tripId>-<code>` from a link. */
 export function parseJoin(search: string): { id: string; code: string } | null {
   const v = new URLSearchParams(search).get('join') || '';
-  const m = /^(.+)-([0-9a-f]{18})$/.exec(v);
-  return m ? { id: m[1], code: m[2] } : null;
+  // Links pasted into chats sometimes pick up a trailing full stop or bracket.
+  const m = /^(.+)-([0-9a-f]{18})(?:[^0-9a-f].*)?$/i.exec(v.trim());
+  return m ? { id: m[1], code: m[2].toLowerCase() } : null;
 }
+
+// Deletes and leaves not yet confirmed by the cloud, kept on the device so they're sent again
+// after a restart instead of the trip coming back.
+type PendingDelete = 'personal' | 'shared' | 'leave';
+const deletesKey = (uid: string) => `intellitrip_pending_deletes_${uid}`;
+const loadDeletes = (uid: string): Record<string, PendingDelete> => {
+  try {
+    return JSON.parse(localStorage.getItem(deletesKey(uid)) || '{}');
+  } catch {
+    return {};
+  }
+};
+const saveDeletes = (uid: string, d: Record<string, PendingDelete>) => {
+  try {
+    localStorage.setItem(deletesKey(uid), JSON.stringify(d));
+  } catch { /* storage full: the delete is still tried now */ }
+};
 
 const basesKey = (uid: string) => `intellitrip_shared_bases_${uid}`;
 const loadBases = (uid: string) => {
@@ -260,6 +298,7 @@ export function useCloudSync(opts: {
   const profileSynced = useRef<number | null>(null);
   const archivesRef = useRef(archives);
   archivesRef.current = archives;
+  const deletes = useRef<Record<string, PendingDelete>>({});
 
   const settle = useCallback((fromCache: boolean) => {
     if (!inFlight.current) setStatus(fromCache || navigator.onLine === false ? 'offline' : 'synced');
@@ -276,6 +315,7 @@ export function useCloudSync(opts: {
     sharedReady.current = false;
     known.current = new Map();
     bases.current = loadBases(uid);
+    deletes.current = loadDeletes(uid);
     sharedIds.current = new Set();
 
     const unsubMine = onSnapshot(
@@ -284,9 +324,10 @@ export function useCloudSync(opts: {
       (snap) => {
         const remote = snap.docs
           .map((d) => ({ id: d.id, ...(d.data() as Omit<RemoteTrip, 'id'>) }))
-          .filter((r) => !sharedIds.current.has(r.id));
+          .filter((r) => !sharedIds.current.has(r.id) && !deletes.current[r.id]);
         for (const r of remote) if (!r.moved) known.current.set(r.id, stamp(r));
         replaceArchives((prev) => mergeTrips(prev, remote));
+        if (!ready.current) setRetry((n) => n + 1); // send deletes left over from last time
         ready.current = true;
         settle(snap.metadata.fromCache);
       },
@@ -300,15 +341,18 @@ export function useCloudSync(opts: {
       query(collection(db, 'shared'), where('members', 'array-contains', uid)),
       { includeMetadataChanges: true },
       (snap) => {
-        const remote = snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<RemoteTrip, 'id'>) }));
+        const remote = snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<RemoteTrip, 'id'>) })).filter((r) => !deletes.current[r.id]);
         sharedIds.current = new Set(remote.map((r) => r.id));
         const local = new Map(archivesRef.current.map((t) => [t.id, t]));
         const updates = new Map<string, { from?: SavedTrip; to: SavedTrip | null }>();
         for (const r of remote) {
           const mine = local.get(r.id);
-          const { to, newBase } = decideShared(mine, r, bases.current.get(r.id));
+          // A base only counts for the version this phone last took in; otherwise ticks and spends are combined.
+          const b = bases.current.get(r.id);
+          const base = b && mine && cloudAt(b) === cloudAt(mine) ? b : undefined;
+          const { to, newBase } = decideShared(mine, r, base);
           if (to !== undefined) updates.set(r.id, { from: mine, to });
-          if (newBase) bases.current.set(r.id, newBase);
+          if (newBase) bases.current.set(r.id, compactBase(newBase, stamp(r)));
           if (r.deleted) bases.current.delete(r.id);
         }
         // A shared trip the cloud no longer lists for us: we left, or the owner removed us.
@@ -319,6 +363,7 @@ export function useCloudSync(opts: {
               bases.current.delete(t.id);
             }
           }
+          if (!sharedReady.current) setRetry((n) => n + 1); // upload shared edits made offline earlier
           sharedReady.current = true;
         }
         saveBases(uid, bases.current);
@@ -363,7 +408,8 @@ export function useCloudSync(opts: {
       if (stamp(r) > cloudAt(t)) {
         try {
           theirs = JSON.parse(r.json || '') as SavedTrip;
-          result = merge3(bases.current.get(t.id), t, theirs);
+          const b = bases.current.get(t.id);
+          result = merge3(b && cloudAt(b) === cloudAt(t) ? b : undefined, t, theirs);
         } catch { /* their copy is unreadable; ours stands */ }
       }
       version = Math.max(stamp(t), stamp(r) + 1);
@@ -371,23 +417,60 @@ export function useCloudSync(opts: {
       if (!json) throw Object.assign(new Error('Trip is too large to sync.'), { code: 'too-large' });
       tx.update(ref, { json, updatedAt: version, title: t.plan?.title || t.form?.destination || '', startDate: t.form?.startDate || '' });
     });
-    bases.current.set(t.id, { ...result, share: undefined, cloudAt: undefined, vibeImage: null });
+    bases.current.set(t.id, compactBase(result, version));
     saveBases(uid, bases.current);
     const to: SavedTrip = { ...result, id: t.id, updatedAt: version, cloudAt: version, share: t.share };
     replaceArchives((prev) => applyShared(prev, new Map([[t.id, { from: t, to }]])));
   }, [db, uid, replaceArchives]);
 
+  /** Sends one delete or leave to the cloud; it stays on the device's list until the cloud confirms it. */
+  const sendDelete = useCallback(async (id: string, kind: PendingDelete) => {
+    if (!db || !uid) return;
+    const at = Date.now();
+    try {
+      if (kind === 'leave') {
+        await updateDoc(doc(db, 'shared', id), { members: arrayRemove(uid), [`names.${uid}`]: deleteField() });
+      } else if (kind === 'shared') {
+        await updateDoc(doc(db, 'shared', id), { deleted: true, json: '', updatedAt: at });
+      } else {
+        await setDoc(doc(db, 'users', uid, 'trips', id), { deleted: true, updatedAt: at, json: '' });
+      }
+      delete deletes.current[id];
+      saveDeletes(uid, deletes.current);
+    } catch (err: any) {
+      // Already gone, or no longer ours to change: nothing left to send.
+      if (err?.code === 'not-found' || err?.code === 'permission-denied') {
+        delete deletes.current[id];
+        saveDeletes(uid, deletes.current);
+        return;
+      }
+      console.error('Could not record the delete in the cloud:', err);
+      setStatus(navigator.onLine === false ? 'offline' : 'error');
+    }
+  }, [db, uid]);
+
+  const flushDeletes = useCallback(() => {
+    for (const [id, kind] of Object.entries(deletes.current)) sendDelete(id, kind);
+  }, [sendDelete]);
+
   // Upload trips that changed here, a moment after the last change to each.
   useEffect(() => {
     if (!db || !uid || !ready.current) return;
+    flushDeletes();
     for (const t of archives) {
       const version = stamp(t);
-      if (t.share) {
-        if (!sharedReady.current || cloudAt(t) >= version) continue;
-      } else if (known.current.has(t.id) && (known.current.get(t.id) ?? 0) >= version) continue;
+      const upToDate = t.share ? cloudAt(t) >= version : known.current.has(t.id) && (known.current.get(t.id) ?? 0) >= version;
+      // A waiting upload of an older copy must not fire once this copy is already in the cloud.
+      if (upToDate || (t.share && !sharedReady.current)) {
+        if (upToDate) { clearTimeout(timers.current.get(t.id)); timers.current.delete(t.id); }
+        continue;
+      }
       clearTimeout(timers.current.get(t.id));
       timers.current.set(t.id, setTimeout(async () => {
         timers.current.delete(t.id);
+        // Only the newest copy goes up; a newer edit has its own upload waiting.
+        const latest = archivesRef.current.find((x) => x.id === t.id);
+        if (!latest || stamp(latest) !== version || Boolean(latest.share) !== Boolean(t.share)) return;
         const json = forUpload(t);
         if (!json) {
           console.warn(`Trip ${t.id} is too large to sync.`);
@@ -419,28 +502,21 @@ export function useCloudSync(opts: {
         }
       }, UPLOAD_DELAY_MS));
     }
-  }, [archives, db, uid, retry, uploadShared]);
+  }, [archives, db, uid, retry, uploadShared, flushDeletes]);
 
   /** Deletes a trip everywhere: the owner of a shared trip deletes it for everyone; a member leaves it. */
   const removeTrip = useCallback(async (t: SavedTrip) => {
     if (!db || !uid) return;
     clearTimeout(timers.current.get(t.id));
     timers.current.delete(t.id);
-    const at = Date.now();
-    known.current.set(t.id, at);
-    try {
-      if (t.share && t.share.owner !== uid) {
-        await updateDoc(doc(db, 'shared', t.id), { members: arrayRemove(uid), [`names.${uid}`]: deleteField() });
-      } else if (t.share) {
-        await updateDoc(doc(db, 'shared', t.id), { deleted: true, json: '', updatedAt: at });
-      } else {
-        await setDoc(doc(db, 'users', uid, 'trips', t.id), { deleted: true, updatedAt: at, json: '' });
-      }
-    } catch (err) {
-      console.error('Could not record the delete in the cloud:', err);
-      setStatus('error');
-    }
-  }, [db, uid]);
+    known.current.set(t.id, Date.now());
+    const kind: PendingDelete = t.share ? (t.share.owner !== uid ? 'leave' : 'shared') : 'personal';
+    deletes.current[t.id] = kind;
+    saveDeletes(uid, deletes.current);
+    bases.current.delete(t.id);
+    saveBases(uid, bases.current);
+    await sendDelete(t.id, kind);
+  }, [db, uid, sendDelete]);
 
   /** Starts planning a trip together: moves it to shared/ with this person as owner. */
   const shareTrip = useCallback(async (t: SavedTrip) => {
@@ -460,7 +536,7 @@ export function useCloudSync(opts: {
       if (err?.code === 'permission-denied') throw new Error("Sharing isn't switched on yet: the new Firestore rules need publishing.");
       throw err;
     }
-    bases.current.set(t.id, JSON.parse(json) as SavedTrip);
+    bases.current.set(t.id, compactBase(JSON.parse(json) as SavedTrip, at));
     saveBases(uid, bases.current);
     sharedIds.current.add(t.id);
     replaceArchives((prev) => prev.map((x) => (x.id === t.id ? { ...x, share, updatedAt: Math.max(stamp(x), at), cloudAt: at } : x)));
@@ -470,12 +546,18 @@ export function useCloudSync(opts: {
   }, [db, uid, name, replaceArchives]);
 
   /** Joins a shared trip from an invite link. */
-  const joinTrip = useCallback(async (id: string, code: string) => {
+  /** Joins a shared trip from an invite link. Returns 'member' when this person is already on it. */
+  const joinTrip = useCallback(async (id: string, code: string): Promise<'joined' | 'member'> => {
     if (!db || !uid) throw new Error('Sign in with Google to join.');
+    // Your own trip, or one you've already joined: just open it.
+    if (archivesRef.current.some((t) => t.id === id && t.share?.members.includes(uid))) return 'member';
     try {
       await updateDoc(doc(db, 'shared', id), { members: arrayUnion(uid), [`names.${uid}`]: name, [`join.${uid}`]: code });
+      return 'joined';
     } catch (err: any) {
-      if (err?.code === 'permission-denied' || err?.code === 'not-found') throw new Error('This invite link has expired or the trip was deleted. Ask for a new link.');
+      if (err?.code === 'permission-denied' || err?.code === 'not-found') {
+        throw new Error("Couldn't join: the link is out of date, the trip already has 12 people, or it was deleted. Ask for a new link.");
+      }
       throw new Error('Could not join the trip. Check your connection and open the link again.');
     }
   }, [db, uid, name]);

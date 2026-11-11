@@ -7,7 +7,8 @@
  * menu, or copied.
  */
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useDialogFocus } from './a11y';
 import { routeStops } from './placecheck';
 import { type SavedTrip, addDays, arr, endDateOf, formatINR } from './tripkit';
 
@@ -104,6 +105,8 @@ export function buildShareText(trip: SavedTrip, opts: ShareOptions): string {
 }
 
 export function ShareSheet({ trip, onClose, extra }: { trip: SavedTrip; onClose: () => void; extra?: React.ReactNode }) {
+  const box = useRef<HTMLDivElement>(null);
+  useDialogFocus(box);
   const [day, setDay] = useState<'all' | number>('all');
   const [links, setLinks] = useState(true);
   const generated = useMemo(() => buildShareText(trip, { day, links }), [trip, day, links]);
@@ -137,7 +140,7 @@ export function ShareSheet({ trip, onClose, extra }: { trip: SavedTrip; onClose:
 
   return (
     <div className="tk-modal-bg" role="presentation" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="tk-modal card" role="dialog" aria-modal="true" aria-labelledby="share-title">
+      <div ref={box} className="tk-modal card" role="dialog" aria-modal="true" aria-labelledby="share-title">
         <div className="tk-modal-head">
           <h3 id="share-title" className="tk-h3"><span className="material-symbols-outlined" aria-hidden="true">share</span>Share with family</h3>
           <button className="btn-icon-bg" onClick={onClose} aria-label="Close">

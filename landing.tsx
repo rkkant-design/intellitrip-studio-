@@ -10,23 +10,33 @@
 import React from 'react';
 import sampleJson from './sample-trip.json';
 import { Logo } from './chrome';
-import { PlanView, type SavedTrip, arr, formatINR } from './tripkit';
-import { RoadRulesCard, fmt } from './roadcheck';
+import { PlanView, type SavedTrip, arr, driveHours, fmtDate, formatINR } from './tripkit';
+import { RoadRulesCard, assess, fmt } from './roadcheck';
+import { ROAD_RULES } from './roadrules';
 import { RouteSketch, TripMap } from './tripmap';
 import { itemsFor } from './today';
 
 /** A real plan IntelliTrip made (Madurai → Thekkady, family of three), with its saved map check. */
 export const SAMPLE = sampleJson as unknown as SavedTrip;
 
+const hm = (h: number) => { const m = Math.round(h * 60); return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`; };
+
 const firstDay = () => {
   const leg = SAMPLE.checks?.legs['0'];
+  // The plan's own time for the drive includes its stops; the map's is pure driving.
+  const planLeg = arr(SAMPLE.plan.roadTrip && typeof SAMPLE.plan.roadTrip === 'object' ? SAMPLE.plan.roadTrip.legs : [])[0];
+  const withStops = driveHours(planLeg?.driveTime);
+  // Shown in the plan's own words ("4h 15m"), so it matches the full sample exactly.
+  const withStopsText = String(planLeg?.driveTime || '').trim();
   const cost = arr(SAMPLE.plan.budget).reduce((s, b) => s + (Number(b.amountInr) || 0), 0);
   const items = itemsFor(SAMPLE, 1).filter((i) => i.kind !== 'arrive').slice(0, 4);
-  return { leg, cost, items };
+  const rules = assess(SAMPLE).filter((f) => f.level !== 'ok');
+  const reviewed = ROAD_RULES.map((r) => r.checked).sort().pop();
+  return { leg, cost, items, withStops, withStopsText, rules, reviewed };
 };
 
 export function SampleCard({ onOpen }: { onOpen: () => void }) {
-  const { leg, cost, items } = firstDay();
+  const { leg, cost, items, withStops, withStopsText, rules, reviewed } = firstDay();
   const day1 = arr(SAMPLE.plan.days)[0];
   return (
     <section className="it-sample card" aria-labelledby="sample-title">
@@ -39,10 +49,16 @@ export function SampleCard({ onOpen }: { onOpen: () => void }) {
         <h2 id="sample-title" className="it-sample-title">{SAMPLE.form.fromLocation} → {SAMPLE.form.destination}: {SAMPLE.plan.title}</h2>
         <div className="it-pills">
           {leg && <span className="it-pill">{leg.km} km on day 1</span>}
-          {leg && <span className="it-pill">{Math.floor(leg.hours)}h {String(Math.round((leg.hours % 1) * 60)).padStart(2, '0')}m driving</span>}
-          {cost > 0 && <span className="it-pill amber">≈ {formatINR(cost)}</span>}
-          <span className="it-pill grey">Road rules checked</span>
+          {leg && <span className="it-pill">{hm(leg.hours)} driving{withStops && withStops > leg.hours + 0.1 ? ` · allow ${withStopsText} with stops` : ''}</span>}
+          {cost > 0 && <span className="it-pill amber">≈ {formatINR(cost)} for 3 days</span>}
         </div>
+        <p className="it-sample-rules tk-small">
+          <span className="material-symbols-outlined" aria-hidden="true">traffic</span>
+          <span>
+            {rules.length ? <><strong>{rules[0].rule.name}.</strong> </> : <strong>No known road rule stops this drive. </strong>}
+            Checked against {ROAD_RULES.length} South Indian road rules{reviewed ? ` (reviewed ${fmtDate(reviewed)})` : ''}. Live closures are checked on your own trip, 1–2 days before you leave.
+          </span>
+        </p>
         <ol className="it-sample-day">
           <li className="it-sample-day-head">Day 1 · {day1?.title || 'On the road'}</li>
           {items.map((i) => (
@@ -87,15 +103,15 @@ export function LandingPage({ onStart, onSample, startLabel, headExtra }: { onSt
             <button className="btn-primary" onClick={onStart}>{startLabel}</button>
             <button className="btn-secondary it-cta-2" onClick={onSample}>View sample trip</button>
           </div>
-          <ul className="it-perks">
-            {PERKS.map(([icon, title, text]) => (
-              <li key={title}>
-                <span className="material-symbols-outlined" aria-hidden="true">{icon}</span>
-                <div><strong>{title}</strong><span>{text}</span></div>
-              </li>
-            ))}
-          </ul>
         </div>
+        <ul className="it-perks">
+          {PERKS.map(([icon, title, text]) => (
+            <li key={title}>
+              <span className="material-symbols-outlined" aria-hidden="true">{icon}</span>
+              <div><strong>{title}</strong><span>{text}</span></div>
+            </li>
+          ))}
+        </ul>
       </main>
     </div>
   );

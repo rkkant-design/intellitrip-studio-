@@ -11,7 +11,7 @@
 
 import React from 'react';
 import { type RoadRule, ROAD_RULES } from './roadrules';
-import { type Leg, type SavedTrip, addDays, arr, driveHours, fmtDate, mmss } from './tripkit';
+import { type Leg, type SavedTrip, addDays, arr, driveHours, fmtDate, mmss, safeUrl } from './tripkit';
 
 export type Level = 'blocker' | 'warning' | 'todo' | 'caution' | 'ok';
 
@@ -22,6 +22,7 @@ export interface Finding {
   leg?: Leg;
   passAt?: string; // "21:40" — roughly when they reach the area
   leaveBy?: string; // latest departure that avoids a closure
+  leaveAfter?: string; // earliest departure that avoids it, when the clash is before the road reopens
   assumedStart?: boolean; // the plan didn't say when they leave
   measured: boolean; // from the real road path, not just place names
   detail: string;
@@ -39,12 +40,18 @@ export const fmt = (min: number) => {
 
 /** First clock time in a bit of plan text: "07:00", "7.30", "6 am", "leave by 5:45 pm". */
 export function firstTime(text?: string): number | null {
-  const s = String(text || '');
+  // "6:30 p.m." and "6.30 P.M" read like "6:30 pm".
+  const s = String(text || '').replace(/\b([ap])\.\s?m\b\.?/gi, '$1m');
   const m = /\b(\d{1,2})[:.](\d{2})\s*(am|pm)?\b/i.exec(s) || /\b(\d{1,2})\s*(am|pm)\b/i.exec(s);
   if (!m) return null;
   let h = Number(m[1]);
   const min = m[2] && /^\d{2}$/.test(m[2]) ? Number(m[2]) : 0;
-  const ap = (m[3] || (m[2] && !/^\d{2}$/.test(m[2]) ? m[2] : '') || '').toLowerCase();
+  let ap = (m[3] || (m[2] && !/^\d{2}$/.test(m[2]) ? m[2] : '') || '').toLowerCase();
+  // A range like "4:30–6:00 pm" carries its am/pm on the second time.
+  if (!ap) {
+    const rest = /^\s*(?:–|—|-|to)\s*\d{1,2}(?:[:.]\d{2})?\s*(am|pm)\b/i.exec(s.slice(m.index + m[0].length));
+    if (rest) ap = rest[1].toLowerCase();
+  }
   if (ap === 'pm' && h < 12) h += 12;
   if (ap === 'am' && h === 12) h = 0;
   return h < 24 && min < 60 ? h * 60 + min : null;
@@ -119,8 +126,14 @@ export function assess(trip: SavedTrip): Finding[] {
       const enter = start + (hit ? hit.enter : 0) * hours * 60;
       const exit = start + (hit ? hit.exit : 1) * hours * 60;
       let closedOnTheWay = false;
-      for (let t = enter; t <= exit; t += 10) if (inClosure(t, rule.closed.from, rule.closed.to)) closedOnTheWay = true;
-      if (inClosure(exit, rule.closed.from, rule.closed.to)) closedOnTheWay = true;
+      let clashAt: number | null = null;
+      for (let t = enter; t <= exit; t += 10) if (inClosure(t, rule.closed.from, rule.closed.to)) { closedOnTheWay = true; clashAt ??= t; }
+      if (inClosure(exit, rule.closed.from, rule.closed.to)) { closedOnTheWay = true; clashAt ??= exit; }
+      // A clash in the small hours (before the road reopens) needs a later start, not an earlier one.
+      const opens = toMin(rule.closed.to);
+      const beforeReopening = clashAt !== null && ((clashAt % 1440) + 1440) % 1440 < opens && opens < toMin(rule.closed.from);
+      const leaveAfterMin = opens + 15 - (hit ? hit.enter : 0) * hours * 60;
+      const leaveAfter = beforeReopening ? fmt(leaveAfterMin) : undefined;
       const passAt = hit ? fmt(enter) : undefined;
       // Latest start that clears the area half an hour before it shuts.
       const leaveByMin = toMin(rule.closed.from) - 30 - (hit ? hit.exit : 1) * hours * 60;
@@ -128,15 +141,16 @@ export function assess(trip: SavedTrip): Finding[] {
 
       if (rule.kind === 'on-alert') {
         findings.push({
-          ...base, level: 'caution', passAt, leaveBy: closedOnTheWay ? leaveBy : undefined,
+          ...base, level: 'caution', passAt, leaveBy: closedOnTheWay && !beforeReopening ? leaveBy : undefined, leaveAfter: closedOnTheWay ? leaveAfter : undefined,
           detail: closedOnTheWay
             ? `${rule.summary} You'd be on these roads around ${passAt ?? 'the evening'}, inside the ${fmt(toMin(rule.closed.from))}–${fmt(toMin(rule.closed.to))} window if an alert is issued.`
             : rule.summary,
         });
       } else if (closedOnTheWay) {
         findings.push({
-          ...base, level: rule.certainty === 'standing' ? 'blocker' : 'warning', passAt, leaveBy,
-          detail: `You'd reach this stretch around ${passAt ?? 'closing time'}, when it is closed (${fmt(toMin(rule.closed.from))} to ${fmt(toMin(rule.closed.to))}).`,
+          ...base, level: rule.certainty === 'standing' ? 'blocker' : 'warning', passAt,
+          leaveBy: beforeReopening ? undefined : leaveBy, leaveAfter,
+          detail: `You'd reach this stretch ${passAt ? `around ${passAt}` : beforeReopening ? 'before it opens' : 'around closing time'}, when it is closed (${fmt(toMin(rule.closed.from))} to ${fmt(toMin(rule.closed.to))}).`,
         });
       } else {
         findings.push({
@@ -206,6 +220,7 @@ export function RoadRulesCard({
           <div className="tk-small">{f.detail}</div>
           {(f.level === 'blocker' || f.level === 'warning' || f.level === 'caution') && <div className="tk-small"><strong>What to do:</strong> {f.rule.whatToDo}</div>}
           {f.leaveBy && <div className="tk-small"><strong>Leave by {f.leaveBy}</strong> on day {f.day} to clear it in time{f.assumedStart ? ' (the plan doesn\'t give a start time, so 8 am was assumed)' : ''}.</div>}
+          {f.leaveAfter && <div className="tk-small"><strong>Leave after {f.leaveAfter}</strong> on day {f.day}, so you reach it once it has opened.</div>}
           {f.assumedStart && !f.leaveBy && f.passAt && <div className="tk-dim tk-small">The plan doesn't give a start time for this day, so 8 am was assumed.</div>}
           {!f.measured && f.level !== 'todo' && <div className="tk-dim tk-small">Found from place names in the plan; the map check gives exact timing.</div>}
           <div className="tk-row tk-rule-links">
@@ -234,7 +249,7 @@ export function RoadRulesCard({
               </div>
               <div className="tk-small">{[n.area, n.when, n.timeWindow].filter(Boolean).join(' · ')}</div>
               {n.whatToDo && <div className="tk-small"><strong>What to do:</strong> {n.whatToDo}</div>}
-              {n.sourceUrl && <a className="tk-place tk-small" href={n.sourceUrl} target="_blank" rel="noopener noreferrer">{n.sourceTitle || n.sourceUrl}</a>}
+              {safeUrl(n.sourceUrl) && <a className="tk-place tk-small" href={safeUrl(n.sourceUrl)} target="_blank" rel="noopener noreferrer">{n.sourceTitle || n.sourceUrl}</a>}
             </div>
           ))}
           <button className="btn-secondary tk-link-btn" onClick={onCheckNotices}>Check again</button>

@@ -9,7 +9,8 @@
  * phones, whose Google Calendar app can't open calendar files.
  */
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useDialogFocus } from './a11y';
 import { type SavedTrip, addDays, arr, endDateOf, fmtDate, todayStr } from './tripkit';
 
 export interface Reminder {
@@ -133,6 +134,8 @@ function downloadIcs(text: string, name: string) {
 // --- UI ---
 
 export function RemindersSheet({ trip, onClose }: { trip: SavedTrip; onClose: () => void }) {
+  const box = useRef<HTMLDivElement>(null);
+  useDialogFocus(box);
   const all = useMemo(() => remindersFor(trip), [trip]);
   const [picked, setPicked] = useState<Record<string, boolean>>(() => Object.fromEntries(all.map((r) => [r.id, !r.past])));
   const [note, setNote] = useState<string | null>(null);
@@ -145,7 +148,7 @@ export function RemindersSheet({ trip, onClose }: { trip: SavedTrip; onClose: ()
 
   return (
     <div className="tk-modal-bg" role="presentation" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="tk-modal card" role="dialog" aria-modal="true" aria-labelledby="rem-title">
+      <div ref={box} className="tk-modal card" role="dialog" aria-modal="true" aria-labelledby="rem-title">
         <div className="tk-modal-head">
           <h3 id="rem-title" className="tk-h3"><span className="material-symbols-outlined" aria-hidden="true">event</span>Calendar reminders</h3>
           <button className="btn-icon-bg" onClick={onClose} aria-label="Close">

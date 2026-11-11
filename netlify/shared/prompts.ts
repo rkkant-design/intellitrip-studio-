@@ -149,7 +149,7 @@ export const REVISE_DAY_SCHEMA = `Return JSON with exactly these keys:
  "needsWholeTrip": false, set it to true (and leave the other keys empty) if this change really alters where they start, where they are going, the dates or who is travelling, because then the whole trip must be replanned,
  "changeNote": "one short sentence telling the family what you changed",
  "day": { the revised day, in exactly the same shape as the days in the current plan },
- "leg": { the revised road-trip leg for this day, in the same shape as the current legs } or null if this day's drive is unchanged or there is no drive,
+ "leg": { the revised road-trip leg for this day, in the same shape as the current legs }, or null if this day's drive is unchanged (or the day never had one), or the string "none" if this day should no longer have a drive,
  "budget": [ the full revised budget list, same shape ] or null if the costs did not change
 }`;
 

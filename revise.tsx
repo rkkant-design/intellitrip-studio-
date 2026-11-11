@@ -8,8 +8,9 @@
  * runs again on the new plan.
  */
 
-import React, { useEffect, useState } from 'react';
-import { type DayPlan, type FormState, type Leg, type Plan, type SavedTrip, arr, mmss } from './tripkit';
+import React, { useEffect, useRef, useState } from 'react';
+import { useDialogFocus } from './a11y';
+import { type DayPlan, type FormState, type Leg, type Plan, type SavedTrip, arr, mmss, tripDetailsProblem } from './tripkit';
 
 export type Scope = 'all' | number;
 
@@ -37,7 +38,16 @@ const QUICK = [
 export const scopeLabel = (s: Scope) => (s === 'all' ? 'the whole trip' : `Day ${s}`);
 
 // Requests that change where they start, the dates or who is going affect every day, not one.
-export const TRIP_WIDE = /\b(start(ing)?\s+(from|point|at)|leav(e|ing)\s+from|depart(ing|ure)?\s+from|instead of [a-z]+ as|from [a-z]+ instead|different (start|date)|(change|move|shift) (the )?(dates?|start)|one more (day|night)|extra (day|night)|(add|remove) (a|one) (day|night)|nights?\b.*\b(instead|more|fewer|less)|(adults?|children|kids|people|travell?ers)\b.*\b(instead|now|more|fewer))\b/i;
+// Kept narrow on purpose: day-level wishes ("more beach time for the kids", "start at 9 am") must not
+// trigger a full replan. The AI can still say a day change really needs the whole trip.
+export const TRIP_WIDE = new RegExp([
+  String.raw`\b(start(ing)?\s+(from|point)|leav(e|ing)\s+from|depart(ing|ure)?\s+from)\b`,
+  String.raw`\bfrom [a-z]+ instead\b`, String.raw`\binstead of [a-z]+ as (the )?start`,
+  String.raw`\b(change|move|shift) (the )?(dates?|start date)\b`, String.raw`\bdifferent (start|dates?)\b`,
+  String.raw`\b(one|an?|another) (more|extra) (day|night)s?\b`, String.raw`\b(add|remove|drop) (a|one|another) (day|night)\b`,
+  String.raw`\b(\d+|one|two|three|four|five|six|seven) (nights|days) (instead|in total|trip)\b`,
+  String.raw`\b(\d+|one|two|three|four|five|six) (more |fewer )?(adults?|children|kids|people|travell?ers) (instead|now|are coming|coming|joining|join)\b`,
+].join('|'), 'i');
 
 /** Fields of the trip details shown in the Change sheet, with what the AI is told they mean. */
 const DETAIL_FIELDS: (keyof FormState)[] = ['fromLocation', 'startDate', 'duration', 'adults', 'children', 'mode', 'maxDrive'];
@@ -70,12 +80,20 @@ export function applyChange(trip: SavedTrip, scope: Scope, change: string, resul
     if (!day || typeof day !== 'object') throw new Error("The AI's answer was missing the day. Please try again.");
     const fixedDay: DayPlan = { ...day, day: scope };
     plan = { ...old, days: arr(old.days).map((d) => (d.day === scope ? fixedDay : d)) };
-    const leg = result?.leg as Leg | null | undefined;
-    if (leg && typeof leg === 'object' && plan.roadTrip && typeof plan.roadTrip === 'object') {
+    const leg = result?.leg as Leg | 'none' | null | undefined;
+    if (plan.roadTrip && typeof plan.roadTrip === 'object') {
       const legs = arr(plan.roadTrip.legs);
-      const fixedLeg = { ...leg, day: scope };
-      const at = legs.findIndex((l) => l.day === scope);
-      plan = { ...plan, roadTrip: { ...plan.roadTrip, legs: at >= 0 ? legs.map((l, i) => (i === at ? fixedLeg : l)) : [...legs, fixedLeg] } };
+      const dayOf = (l: Leg, i: number) => l.day ?? i + 1;
+      if (leg === 'none') {
+        // The day no longer has a drive.
+        plan = { ...plan, roadTrip: { ...plan.roadTrip, legs: legs.filter((l, i) => dayOf(l, i) !== scope) } };
+      } else if (leg && typeof leg === 'object') {
+        const fixedLeg = { ...leg, day: scope };
+        const at = legs.findIndex((l, i) => dayOf(l, i) === scope);
+        const next = at >= 0 ? legs.map((l, i) => (i === at ? fixedLeg : l)) : [...legs.map((l, i) => ({ ...l, day: dayOf(l, i) })), fixedLeg];
+        // Keep the drives in day order.
+        plan = { ...plan, roadTrip: { ...plan.roadTrip, legs: next.sort((a, b) => (a.day ?? 0) - (b.day ?? 0)) } };
+      }
     }
     if (Array.isArray(result?.budget) && result.budget.length) plan = { ...plan, budget: result.budget };
   }
@@ -143,6 +161,8 @@ export function ChangeSheet({
   onSubmit: (scope: Scope, change: string, newForm: FormState | null) => void;
   onClose: () => void;
 }) {
+  const box = useRef<HTMLDivElement>(null);
+  useDialogFocus(box);
   const [scope, setScope] = useState<Scope>(initialScope);
   const [text, setText] = useState(initialText);
   const [form, setForm] = useState<FormState>(trip.form);
@@ -159,13 +179,15 @@ export function ChangeSheet({
   const effectiveScope: Scope = editedDetails || typedTripWide ? 'all' : scope;
   const set = (k: keyof FormState, v: string) => setForm((f) => ({ ...f, [k]: v }));
   const addQuick = (q: string) => setText((t) => (t.trim() ? `${t.trim().replace(/[.,;]$/, '')}; ${q.toLowerCase()}` : q));
-  const canSubmit = Boolean(text.trim()) || editedDetails;
+  // A trip already under way keeps its start date; only a newly picked date must be today or later.
+  const problem = editedDetails ? tripDetailsProblem(form, { allowPastStart: form.startDate === trip.form.startDate }) : null;
+  const canSubmit = (Boolean(text.trim()) || editedDetails) && !problem;
   const submit = () => canSubmit && onSubmit(effectiveScope, text.trim(), editedDetails ? form : null);
   const plural = (n: unknown, one: string, many: string) => (Number(n) === 1 ? one : many);
 
   return (
     <div className="tk-modal-bg" role="presentation" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="tk-modal card" role="dialog" aria-modal="true" aria-labelledby="change-title">
+      <div ref={box} className="tk-modal card" role="dialog" aria-modal="true" aria-labelledby="change-title">
         <div className="tk-modal-head">
           <h3 id="change-title" className="tk-h3"><span className="material-symbols-outlined" aria-hidden="true">edit_note</span>Change this trip</h3>
           <button className="btn-icon-bg" onClick={onClose} aria-label="Close">
@@ -231,6 +253,7 @@ export function ChangeSheet({
           <textarea id="change-text" value={text} onChange={(e) => setText(e.target.value)} maxLength={600}
             placeholder="e.g. Add a temple visit in the morning, skip the boating, lunch somewhere with a view…" />
         </div>
+        {problem && <p className="error" role="alert">{problem}</p>}
         <div className="tk-row">
           <button className="btn-accent" onClick={submit} disabled={!canSubmit}>
             {editedDetails ? 'Replan with new details' : `Update ${scopeLabel(effectiveScope)}`}

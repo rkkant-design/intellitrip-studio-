@@ -722,14 +722,18 @@ h1, h2, h3 { color: var(--text-bright); letter-spacing: -0.01em; }
 .it-head-spacer { width: 88px; }
 .it-back { display: inline-flex; align-items: center; gap: 0.3rem; }
 .it-head-cta { width: auto; min-height: 44px; padding: 0 1.1rem; font-size: 0.9rem; }
-.it-landing-main { max-width: 1160px; margin: 0 auto; padding: 2.5rem 2rem 4rem; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr); gap: 3rem; align-items: start; }
+/* Laptop: the sample on the left, the promise and features on the right. Phone: promise and buttons first. */
+.it-landing-main { max-width: 1160px; margin: 0 auto; padding: 2.5rem 2rem 4rem; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr); grid-template-areas: 'sample copy' 'sample perks'; column-gap: 3rem; row-gap: 1.5rem; align-items: start; }
+.it-landing-sample { grid-area: sample; }
+.it-landing-copy { grid-area: copy; }
+.it-perks { grid-area: perks; }
 .it-landing-copy { display: flex; flex-direction: column; gap: 1.1rem; padding-top: 1rem; }
 .it-landing-copy h1 { font-size: clamp(2rem, 4.2vw, 3.1rem); line-height: 1.08; font-weight: 800; letter-spacing: -0.03em; }
 .it-lede { font-size: 1.08rem; color: var(--text-dim); max-width: 34rem; }
 .it-cta { display: flex; gap: 0.75rem; flex-wrap: wrap; }
 .it-cta .btn-primary { width: auto; flex: 1 1 12rem; }
 .it-cta-2 { flex: 1 1 12rem; min-height: 52px; font-size: 1rem; }
-.it-perks { list-style: none; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem 1.25rem; margin-top: 1rem; }
+.it-perks { list-style: none; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem 1.25rem; align-self: start; }
 .it-perks li { display: flex; gap: 0.7rem; align-items: flex-start; }
 .it-perks .material-symbols-outlined { flex: none; width: 38px; height: 38px; border-radius: 11px; background: var(--primary-tint); color: var(--primary-dark); display: flex; align-items: center; justify-content: center; font-size: 1.25rem; }
 .it-perks div { display: flex; flex-direction: column; gap: 0.1rem; }
@@ -763,7 +767,9 @@ h1, h2, h3 { color: var(--text-bright); letter-spacing: -0.01em; }
 .it-login-sample { min-height: 48px; }
 .it-form-sample { width: 100%; margin-top: 0.75rem; min-height: 48px; }
 @media (max-width: 860px) {
-  .it-landing-main { grid-template-columns: minmax(0, 1fr); gap: 1.5rem; padding: 1rem 1rem 3rem; }
+  .it-landing-main { grid-template-columns: minmax(0, 1fr); grid-template-areas: 'copy' 'sample' 'perks'; gap: 1.5rem; padding: 1.25rem 1rem 3rem; }
+  .it-landing-copy h1 { font-size: 2rem; }
+  .tm-sketch { height: 170px; }
   .it-landing-copy { padding-top: 0; }
   .it-perks { grid-template-columns: minmax(0, 1fr); }
   .it-public-head { padding-left: 1rem; padding-right: 1rem; }
@@ -785,3 +791,18 @@ h1, h2, h3 { color: var(--text-bright); letter-spacing: -0.01em; }
 .tm-sketch-empty { background: #E8EFE6; display: flex; align-items: center; justify-content: center; color: var(--text-dim); }
 .tm-sketch-label { font: 700 15px var(--font); fill: #15202B; paint-order: stroke; stroke: #E8EFE6; stroke-width: 5px; }
 .it-crash { max-width: 420px; margin: 20vh auto 0; padding: 0 1rem; display: flex; flex-direction: column; gap: 1rem; text-align: center; }
+
+/* --- Touch targets (44 px) and readable faded items --- */
+.tk-expense .btn-icon-bg { width: 44px; height: 44px; }
+.tk-gcal { min-height: 44px; padding: 0.35rem 0.75rem; }
+.it-link { min-height: 44px; }
+.tk-chip-btn { min-height: 44px; }
+.today-day { min-height: 44px; }
+.tk-reminder.past { opacity: 1; }
+.tk-reminder.past .tk-check span { color: var(--text-dim); }
+.today-item.done .today-item-text { opacity: 1; }
+.today-item.done .today-item-text strong, .today-item.done .today-item-text span { color: var(--text-dim); }
+
+.it-sample-rules { display: flex; gap: 0.5rem; align-items: flex-start; color: var(--text); background: var(--surface-2); border-radius: 12px; padding: 0.6rem 0.75rem; }
+.it-sample-rules .material-symbols-outlined { color: var(--primary); font-size: 1.15rem; flex: none; margin-top: 1px; }
+.tm-loading { background: #E8EFE6; }
