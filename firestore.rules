@@ -1,12 +1,60 @@
 rules_version = '2';
 
-// IntelliTrip sync: each signed-in person can read and write only their own
-// data under users/{their uid}/. Nobody else, signed in or not, can see it.
+// IntelliTrip sync.
+// - users/{uid}/...: each signed-in person can read and write only their own data.
+// - shared/{tripId}: a trip planned together. Only its members can read or edit
+//   it; only the person who started it can remove people or make a new invite
+//   link; anyone else can join only by proving they have the current invite code.
 // Paste this into Firebase console → Firestore Database → Rules → Publish.
 service cloud.firestore {
   match /databases/{database}/documents {
     match /users/{userId}/{document=**} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    match /shared/{tripId} {
+      function signedIn() { return request.auth != null; }
+      function me() { return request.auth.uid; }
+      function isMember() { return signedIn() && me() in resource.data.members; }
+      function isOwner() { return isMember() && resource.data.owner == me(); }
+      function changed() { return request.resource.data.diff(resource.data).affectedKeys(); }
+      function tripKeys() { return ['json', 'updatedAt', 'deleted', 'title', 'startDate']; }
+      function membersNow() { return request.resource.data.members.toSet(); }
+      function membersBefore() { return resource.data.members.toSet(); }
+
+      allow read: if isMember();
+
+      allow create: if signedIn()
+        && request.resource.data.owner == me()
+        && request.resource.data.members == [me()]
+        && request.resource.data.code is string
+        && request.resource.data.code.size() >= 16;
+
+      // Members edit the trip itself.
+      allow update: if isMember() && changed().hasOnly(tripKeys());
+
+      // The owner also manages who is on it and the invite code (and stays on it).
+      allow update: if isOwner()
+        && changed().hasOnly(tripKeys().concat(['members', 'names', 'code']))
+        && me() in request.resource.data.members
+        && request.resource.data.members.size() <= 12
+        && request.resource.data.code is string
+        && request.resource.data.code.size() >= 16;
+
+      // Anyone else on it may leave (remove only themselves).
+      allow update: if isMember() && !isOwner()
+        && changed().hasOnly(['members', 'names'])
+        && membersNow() == membersBefore().difference([me()].toSet());
+
+      // Joining with an invite link: add only yourself, with the current code.
+      allow update: if signedIn() && !(me() in resource.data.members)
+        && resource.data.deleted != true
+        && changed().hasOnly(['members', 'names', 'join'])
+        && membersNow() == membersBefore().union([me()].toSet())
+        && request.resource.data.members.size() <= 12
+        && request.resource.data.join[me()] == resource.data.code
+        && request.resource.data.join.diff(resource.data.get('join', {})).affectedKeys().hasOnly([me()])
+        && request.resource.data.names.diff(resource.data.get('names', {})).affectedKeys().hasOnly([me()]);
     }
   }
 }

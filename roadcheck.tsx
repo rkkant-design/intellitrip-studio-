@@ -31,7 +31,7 @@ const toMin = (hhmm: string) => {
   const [h, m] = hhmm.split(':').map(Number);
   return h * 60 + m;
 };
-const fmt = (min: number) => {
+export const fmt = (min: number) => {
   const m = ((Math.round(min) % 1440) + 1440) % 1440;
   const h = Math.floor(m / 60);
   return `${h % 12 === 0 ? 12 : h % 12}:${String(m % 60).padStart(2, '0')} ${h < 12 ? 'am' : 'pm'}`;
@@ -51,7 +51,7 @@ export function firstTime(text?: string): number | null {
 }
 
 /** When a leg starts: the plan's departure time for day 1, else the day's first activity, else 8 am (assumed). */
-function legStart(trip: SavedTrip, leg: Leg, index: number): { min: number; assumed: boolean } {
+export function legStart(trip: SavedTrip, leg: Leg, index: number): { min: number; assumed: boolean } {
   const rt = trip.plan.roadTrip && typeof trip.plan.roadTrip === 'object' ? trip.plan.roadTrip : null;
   const dayNo = leg.day ?? index + 1;
   const day = arr(trip.plan.days).find((d) => d.day === dayNo);
@@ -159,7 +159,7 @@ export function assess(trip: SavedTrip): Finding[] {
   return findings.sort((a, b) => order.indexOf(a.level) - order.indexOf(b.level) || (a.day || 0) - (b.day || 0));
 }
 
-const LEVEL_LABEL: Record<Level, string> = {
+export const LEVEL_LABEL: Record<Level, string> = {
   blocker: 'Closed when you\'d be there', warning: 'Check before you go', todo: 'Needs a permit',
   caution: 'On rain-alert days', ok: 'Fine on this plan',
 };

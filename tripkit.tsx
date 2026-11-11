@@ -82,6 +82,15 @@ export interface Expense {
   day: number;
   note?: string;
   at: string;
+  by?: string; // who logged it, on a trip shared with family
+}
+
+/** A trip planned together: kept in shared/{id} in Firestore, readable and editable by its members. */
+export interface ShareInfo {
+  owner: string; // uid
+  members: string[]; // uids, owner included
+  names?: Record<string, string>; // uid -> display name
+  code?: string; // the current invite code; a new one turns the old link off
 }
 
 /** Money for one trip: fuel settings (overriding the Travellers defaults) and what was spent. */
@@ -123,6 +132,9 @@ export interface SavedTrip {
   lastChange?: { note: string; change: string; scope: 'all' | number; at: string } | null;
   wallet?: Wallet;
   notices?: RoadNotices | null;
+  today?: Record<string, boolean>; // Today mode: "day|item" -> done
+  share?: ShareInfo | null; // set when the trip is shared with family (comes from the cloud, not stored in json)
+  cloudAt?: number; // shared trips: the cloud version this phone last took in (kept on this device only)
   updatedAt?: number; // ms since 1970; the newer copy wins when syncing between devices
   dateCreated: string;
 }
@@ -633,9 +645,10 @@ export function PackingCard({
 }
 
 export function PlanView({
-  trip, packingSlot, changeSlot, rulesSlot, sidebarSlot, checkProgress, onRecheck, onChangeDay,
+  trip, packingSlot, changeSlot, rulesSlot, sidebarSlot, mapSlot, checkProgress, onRecheck, onChangeDay,
 }: {
   trip: SavedTrip;
+  mapSlot?: React.ReactNode;
   packingSlot: React.ReactNode;
   changeSlot?: React.ReactNode;
   rulesSlot?: React.ReactNode;
@@ -652,6 +665,7 @@ export function PlanView({
     <div className="results-grid">
       <div className="itinerary-list">
         {changeSlot}
+        {mapSlot}
         <MapCheckCard trip={trip} progress={checkProgress} onRecheck={onRecheck} />
         {rulesSlot}
         {(p.weather || arr(p.alerts).length > 0) && (

@@ -33,6 +33,8 @@ export interface LegCheck {
   source: 'Mapbox' | 'OpenStreetMap';
   /** Road rules whose area this drive passes through, as fractions (0–1) of the way along it. */
   hits?: { ruleId: string; enter: number; exit: number }[];
+  /** The road's shape for the trip map, as [lon, lat] pairs, thinned to keep the trip small. */
+  path?: [number, number][];
 }
 
 export interface Checks {
@@ -307,6 +309,23 @@ export function ruleHits(path: [number, number][]): { ruleId: string; enter: num
   return hits;
 }
 
+/** A road path cut down to points at least ~1 km apart (at most 250), rounded to ~10 m. */
+export function thinPath(path: [number, number][]): [number, number][] {
+  const pts = path.filter((p) => Array.isArray(p) && Number.isFinite(p[0]) && Number.isFinite(p[1]));
+  if (pts.length < 2) return pts.map(([a, b]) => [Math.round(a * 1e4) / 1e4, Math.round(b * 1e4) / 1e4]);
+  let total = 0;
+  for (let i = 1; i < pts.length; i++) total += km({ lat: pts[i - 1][1], lon: pts[i - 1][0] }, { lat: pts[i][1], lon: pts[i][0] });
+  const step = Math.max(1, total / 250);
+  const out: [number, number][] = [pts[0]];
+  let since = 0;
+  for (let i = 1; i < pts.length - 1; i++) {
+    since += km({ lat: pts[i - 1][1], lon: pts[i - 1][0] }, { lat: pts[i][1], lon: pts[i][0] });
+    if (since >= step) { out.push(pts[i]); since = 0; }
+  }
+  out.push(pts[pts.length - 1]);
+  return out.map(([a, b]) => [Math.round(a * 1e4) / 1e4, Math.round(b * 1e4) / 1e4]);
+}
+
 /** Road distance, pure driving time and road-rule areas crossed, through the given points in order. */
 async function routeThrough(points: Point[]): Promise<LegCheck | null> {
   if (points.length < 2) return null;
@@ -316,13 +335,14 @@ async function routeThrough(points: Point[]): Promise<LegCheck | null> {
     hours: Math.round((r.duration / 3600) * 10) / 10,
     source,
     hits: ruleHits(Array.isArray(r.geometry?.coordinates) ? r.geometry.coordinates : []),
+    path: thinPath(Array.isArray(r.geometry?.coordinates) ? r.geometry.coordinates : []),
   });
   if (MAPBOX_TOKEN) {
-    const d = await getJson(`https://api.mapbox.com/directions/v5/mapbox/driving/${coords}?overview=simplified&geometries=geojson&access_token=${MAPBOX_TOKEN}`);
+    const d = await getJson(`https://api.mapbox.com/directions/v5/mapbox/driving/${coords}?overview=full&geometries=geojson&access_token=${MAPBOX_TOKEN}`);
     const r = d?.routes?.[0];
     if (r) return shape(r, 'Mapbox');
   }
-  const o = await getJson(`https://router.project-osrm.org/route/v1/driving/${coords}?overview=simplified&geometries=geojson`);
+  const o = await getJson(`https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson`);
   const r = o?.routes?.[0];
   return r ? shape(r, 'OpenStreetMap') : null;
 }

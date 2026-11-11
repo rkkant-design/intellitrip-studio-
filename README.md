@@ -67,8 +67,12 @@ dir, and redirects).
   stop-by-stop drives with Google Maps links, where to eat, driving tips, a warning when a
   drive exceeds your daily limit), day cards with hidden gems and Hero Moments, a stay pick,
   budget, booking deadlines, documents, sources and a packing list.
-- **Live Radar** shows live weather ([Open-Meteo](https://open-meteo.com), free, no key) and
-  a live traffic map (Mapbox GL; set `VITE_MAPBOX_TOKEN`), plus the plan's advisories.
+- **Today** is the screen for the road. On a trip day it opens by itself: the day's drive and
+  plan as a timeline you tick off, a big Navigate button for the next stop (Google Maps, to the
+  exact spot when the map check found it), today's road-rule warnings, quick spend entry, the
+  weather and today's map with live traffic. It works offline once the app is installed.
+- The plan view has a **Trip Map**: each day's real road (from the map check) in its own colour,
+  with pins for the stay, food stops, sights and hidden gems (Mapbox GL; `VITE_MAPBOX_TOKEN`).
 - **Archives** keeps every plan in this browser and imports trip files from the laptop
   Trip Kit app.
 - **Toolkit** holds the Travellers profile (used by every plan), the Book By calculator and
@@ -78,5 +82,9 @@ dir, and redirects).
 
 - AI advisories are planning guidance, not a live feed (weather and traffic are live).
 - The "login" is a display-name only until Firebase is configured (see `.env.example`).
-- Archives, travellers and checklists are stored in the browser's `localStorage`, so they
-  don't sync between devices yet.
+- Trips are saved in the browser first, then synced through Firestore for signed-in users.
+- **Plan together**: Share → Invite family moves a trip to `shared/{tripId}` in Firestore and
+  gives an invite link. Members see changes live; ticks, Today's done stops and spends from
+  several phones are merged field by field. `firestore.rules` must be published for this.
+- **Install as an app**: `public/manifest.webmanifest` and `public/sw.js` make the site
+  installable and let it open offline (production builds only).

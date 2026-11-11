@@ -5,8 +5,6 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
-import mapboxgl from 'mapbox-gl';
-import 'mapbox-gl/dist/mapbox-gl.css';
 import {
   type FormState, type Profile, type SavedTrip, type Packing, type Plan,
   BookByCard, LeaveCard, PackingCard, PENDING_KEY, PlanView, STORAGE_KEY, TravellersCard,
@@ -14,6 +12,9 @@ import {
 } from './tripkit';
 import { checkPlan, placesIn } from './placecheck';
 import { ShareSheet } from './share';
+import { TripMap } from './tripmap';
+import { TodayView, dayOnDate, tripToday } from './today';
+import { TogetherSection } from './together';
 import { WalletCard } from './wallet';
 import { RemindersCard, RemindersSheet } from './reminders';
 import { RoadRulesCard } from './roadcheck';
@@ -29,10 +30,27 @@ import {
   type Auth,
 } from 'firebase/auth';
 import { getFirestore, type Firestore } from 'firebase/firestore';
-import { type SyncStatus, useCloudSync } from './sync';
+import { type SyncStatus, parseJoin, useCloudSync } from './sync';
 
-// Mapbox public token (safe to expose; restrict by URL in Mapbox settings).
-const MAPBOX_TOKEN = (import.meta as any).env?.VITE_MAPBOX_TOKEN as string | undefined;
+// Installed-app support: the service worker lets the app open offline. Production builds only,
+// so local development always runs the latest code.
+if ('serviceWorker' in navigator && (import.meta as any).env?.PROD) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch((e) => console.warn('Offline support unavailable:', e));
+  });
+}
+
+// An invite link (?join=...) is remembered through sign-in, then the link is tidied away.
+const JOIN_KEY = 'intellitrip_join';
+{
+  const join = parseJoin(window.location.search);
+  if (join) {
+    store.set(JOIN_KEY, join);
+    const url = new URL(window.location.href);
+    url.searchParams.delete('join');
+    window.history.replaceState(null, '', url.pathname + url.search + url.hash);
+  }
+}
 
 // --- FIREBASE AUTH (activates only when config env vars are present) ---
 // All values below are public client config (safe in the browser), supplied as
@@ -72,7 +90,7 @@ const SYNC_LABEL: Record<SyncStatus, string> = {
 
 // --- TYPES ---
 
-type ActiveTab = 'planner' | 'radar' | 'archives' | 'toolkit';
+type ActiveTab = 'planner' | 'today' | 'archives' | 'toolkit';
 
 interface PendingPlan {
   jobId: string;
@@ -217,7 +235,7 @@ const WeatherTracker = ({ destination }: { destination: string }) => {
   return (
     <div className="card weather-card">
       <div className="weather-head">
-        <h3>Live Weather</h3>
+        <h3>Weather</h3>
         {place && <span className="weather-place">{place}</span>}
       </div>
 
@@ -244,117 +262,9 @@ const WeatherTracker = ({ destination }: { destination: string }) => {
               </div>
             ))}
           </div>
-          <p className="weather-note">Current 7-day outlook for the destination (updates in real time).</p>
+          <p className="weather-note">7-day outlook (needs signal).</p>
         </>
       )}
-    </div>
-  );
-};
-
-// --- LIVE TRAFFIC MAP (Mapbox GL + live traffic tiles) ---
-
-const CONGESTION_COLORS: Record<string, string> = {
-  low: '#3fb950',
-  moderate: '#f2cc60',
-  heavy: '#f85149',
-  severe: '#b62324',
-};
-
-const TrafficMap = ({ destination }: { destination: string }) => {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const mapRef = useRef<any>(null);
-  const [error, setError] = useState<'token' | 'locate' | null>(MAPBOX_TOKEN ? null : 'token');
-
-  useEffect(() => {
-    if (!MAPBOX_TOKEN || !destination.trim() || !containerRef.current) return;
-    let cancelled = false;
-
-    const init = async () => {
-      try {
-        const geoRes = await fetch(
-          `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(destination)}&count=1&language=en&format=json`
-        );
-        const geo = await geoRes.json();
-        const loc = geo?.results?.[0];
-        if (!loc) throw new Error('locate');
-        if (cancelled || !containerRef.current) return;
-
-        mapboxgl.accessToken = MAPBOX_TOKEN;
-        const map = new mapboxgl.Map({
-          container: containerRef.current,
-          style: 'mapbox://styles/mapbox/dark-v11',
-          center: [loc.longitude, loc.latitude],
-          zoom: 11,
-          attributionControl: true,
-        });
-        mapRef.current = map;
-        map.addControl(new mapboxgl.NavigationControl(), 'top-right');
-        new mapboxgl.Marker({ color: '#58a6ff' })
-          .setLngLat([loc.longitude, loc.latitude])
-          .addTo(map);
-
-        map.on('load', () => {
-          map.addSource('mapbox-traffic', {
-            type: 'vector',
-            url: 'mapbox://mapbox.mapbox-traffic-v1',
-          });
-          map.addLayer({
-            id: 'traffic',
-            type: 'line',
-            source: 'mapbox-traffic',
-            'source-layer': 'traffic',
-            paint: {
-              'line-width': 2.5,
-              'line-color': [
-                'match',
-                ['get', 'congestion'],
-                'low', CONGESTION_COLORS.low,
-                'moderate', CONGESTION_COLORS.moderate,
-                'heavy', CONGESTION_COLORS.heavy,
-                'severe', CONGESTION_COLORS.severe,
-                '#8b949e',
-              ],
-            },
-          });
-        });
-      } catch {
-        if (!cancelled) setError('locate');
-      }
-    };
-
-    init();
-    return () => {
-      cancelled = true;
-      if (mapRef.current) {
-        mapRef.current.remove();
-        mapRef.current = null;
-      }
-    };
-  }, [destination]);
-
-  return (
-    <div className="card map-card">
-      <div className="map-head">
-        <h3>Live Traffic</h3>
-        {!error && (
-          <div className="map-legend" aria-hidden="true">
-            <span><i style={{ background: CONGESTION_COLORS.low }} />Free</span>
-            <span><i style={{ background: CONGESTION_COLORS.moderate }} />Moderate</span>
-            <span><i style={{ background: CONGESTION_COLORS.heavy }} />Heavy</span>
-            <span><i style={{ background: CONGESTION_COLORS.severe }} />Severe</span>
-          </div>
-        )}
-      </div>
-
-      {error === 'token' && (
-        <p className="weather-status">
-          Live traffic map is not configured yet. Add a <code>VITE_MAPBOX_TOKEN</code> to enable it.
-        </p>
-      )}
-      {error === 'locate' && (
-        <p className="weather-status weather-error">Couldn't place "{destination}" on the map.</p>
-      )}
-      {!error && <div ref={containerRef} className="map-container" />}
     </div>
   );
 };
@@ -362,13 +272,15 @@ const TrafficMap = ({ destination }: { destination: string }) => {
 // --- MAIN DASHBOARD ---
 
 const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, onLogout }) => {
-  const [activeTab, setActiveTab] = useState<ActiveTab>('planner');
+  // A trip happening today opens straight into Today mode.
+  const [activeTab, setActiveTab] = useState<ActiveTab>(() => (tripToday(loadArchives()) ? 'today' : 'planner'));
+  const [todayId, setTodayId] = useState<string | null>(() => tripToday(loadArchives())?.id ?? null);
+  const [installPrompt, setInstallPrompt] = useState<any>(null);
   const [profile, setProfile] = useState<Profile>(loadProfile);
   const [form, setForm] = useState<FormState>(() => emptyForm(loadProfile()));
   const [pending, setPending] = useState<PendingPlan | null>(() => store.get<PendingPlan | null>(PENDING_KEY, null));
   const [seconds, setSeconds] = useState(0);
   const [trip, setTrip] = useState<SavedTrip | null>(null);
-  const [isTripCommenced, setIsTripCommenced] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [archives, setArchives] = useState<SavedTrip[]>(loadArchives);
   const [toast, setToast] = useState<string | null>(null);
@@ -438,9 +350,44 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
     setArchives((prev) => persistArchives(fn(prev)) ?? prev);
   }, [persistArchives]);
   const applyProfile = useCallback((p: Profile) => { saveProfile(p); setProfile(p); }, []);
-  const { status: syncStatus, removeTrip } = useCloudSync({
-    db: firestore, uid: user.uid || null, archives, replaceArchives, profile, applyProfile,
+  const firstName = user.name.split(/\s+/)[0] || user.name;
+  const { status: syncStatus, removeTrip, shareTrip, joinTrip, resetInvite } = useCloudSync({
+    db: firestore, uid: user.uid || null, name: user.name, archives, replaceArchives, profile, applyProfile,
   });
+
+  // Joining a trip from an invite link, once signed in with Google.
+  const openWhenArrives = useRef<string | null>(null);
+  useEffect(() => {
+    const join = store.get<{ id: string; code: string } | null>(JOIN_KEY, null);
+    if (!join) return;
+    if (!user.uid) {
+      showToast('Sign in with Google to join the trip you were invited to.');
+      return;
+    }
+    store.set(JOIN_KEY, null);
+    joinTrip(join.id, join.code)
+      .then(() => { openWhenArrives.current = join.id; showToast('You joined the trip. It syncs to your phone now.'); })
+      .catch((e: Error) => showToast(e.message));
+  }, [user.uid, joinTrip, showToast]);
+  useEffect(() => {
+    const id = openWhenArrives.current;
+    const t = id ? archives.find((x) => x.id === id) : undefined;
+    if (t) {
+      openWhenArrives.current = null;
+      setTrip(t);
+      setForm(t.form);
+      setActiveTab('planner');
+    }
+  }, [archives]);
+
+  // Android/Chrome offers installing the app; keep the offer for the header button.
+  useEffect(() => {
+    const onPrompt = (e: Event) => { e.preventDefault(); setInstallPrompt(e); };
+    const onInstalled = () => { setInstallPrompt(null); showToast('IntelliTrip is on your home screen.'); };
+    window.addEventListener('beforeinstallprompt', onPrompt);
+    window.addEventListener('appinstalled', onInstalled);
+    return () => { window.removeEventListener('beforeinstallprompt', onPrompt); window.removeEventListener('appinstalled', onInstalled); };
+  }, [showToast]);
 
   // Keep the open trip in step with its saved copy: another device may have changed or deleted it.
   useEffect(() => {
@@ -541,15 +488,18 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
     }
   }, [patchTrip, showToast]);
 
-  // Any open trip that has places or drives but no map check yet gets one. Checks made before
-  // road rules existed lack the road paths' rule areas, so those run once more too.
+  // The trip on screen (open in the planner, or in Today mode) gets a map check when it has places
+  // or drives but none yet. Checks made before road rules or the trip map lack the road paths'
+  // rule areas or shapes, so those run once more too.
+  const onScreen = activeTab === 'today' ? archives.find((x) => x.id === todayId) || tripToday(archives) || trip : trip;
   useEffect(() => {
-    if (!trip || checkingRef.current) return;
-    const hasDrives = Boolean(trip.plan.roadTrip && typeof trip.plan.roadTrip === 'object' && arr(trip.plan.roadTrip.legs).length);
-    const needsCheck = !trip.checks && (placesIn(trip.plan).length > 0 || hasDrives);
-    const beforeRoadRules = Boolean(trip.checks && Object.values(trip.checks.legs || {}).some((l) => l && !('hits' in l)));
-    if (needsCheck || beforeRoadRules) runChecks(trip);
-  }, [trip, runChecks]);
+    const t = onScreen;
+    if (!t || checkingRef.current) return;
+    const hasDrives = Boolean(t.plan.roadTrip && typeof t.plan.roadTrip === 'object' && arr(t.plan.roadTrip.legs).length);
+    const needsCheck = !t.checks && (placesIn(t.plan).length > 0 || hasDrives);
+    const beforeMap = Boolean(t.checks && Object.values(t.checks.legs || {}).some((l) => l && (!('hits' in l) || !l.path)));
+    if ((needsCheck || beforeMap) && navigator.onLine !== false) runChecks(t);
+  }, [onScreen, runChecks]);
 
   // Follow a plan job until it's ready. Survives tab switches and page reloads via localStorage.
   useEffect(() => {
@@ -602,7 +552,6 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
     }
     setError(null);
     setTrip(null);
-    setIsTripCommenced(false);
     try {
       const jobId = await startJob('/api/plan', { ...form, profile }, await getHeaders());
       const next: PendingPlan = { jobId, form, startedAt: Date.now() };
@@ -653,18 +602,20 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
   const openArchived = (t: SavedTrip) => {
     setTrip(t);
     setForm(t.form);
-    setIsTripCommenced(false);
     setActiveTab('planner');
   };
 
-  const deleteArchived = (id: string) => {
-    const next = archives.filter((t) => t.id !== id);
+  // A shared trip is deleted for everyone by the person who started it; anyone else leaves it.
+  const leaves = (t: SavedTrip) => Boolean(t.share && user.uid && t.share.owner !== user.uid);
+  const deleteArchived = (t: SavedTrip) => {
+    const next = archives.filter((x) => x.id !== t.id);
     const saved = persistArchives(next);
     if (saved) setArchives(saved);
-    if (trip?.id === id) setTrip(null);
+    if (trip?.id === t.id) setTrip(null);
     setConfirmDelete(null);
-    removeTrip(id);
-    showToast('Trip deleted.');
+    setSharing(false);
+    removeTrip(t);
+    showToast(leaves(t) ? 'You left the trip.' : t.share ? 'Trip deleted for everyone.' : 'Trip deleted.');
   };
 
   // Brings in trips saved by the laptop Trip Kit app (data/trips/*.json).
@@ -686,7 +637,8 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
     if (importRef.current) importRef.current.value = '';
   };
 
-  const destination = trip?.form.destination || form.destination;
+  const todayTrip = archives.find((x) => x.id === todayId) || tripToday(archives) || trip;
+  const openToday = (t: SavedTrip) => { setTodayId(t.id); setActiveTab('today'); };
 
   return (
     <div className="app-container">
@@ -702,7 +654,12 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
               {SYNC_LABEL[syncStatus]}
             </span>
           )}
-          <span>{user.name}</span>
+          {installPrompt && (
+            <button className="btn-secondary tk-install" onClick={async () => { installPrompt.prompt(); await installPrompt.userChoice.catch(() => null); setInstallPrompt(null); }}>
+              <span className="material-symbols-outlined" aria-hidden="true">install_mobile</span>Install app
+            </button>
+          )}
+          <span className="tk-username">{user.name}</span>
           <button onClick={onLogout} className="btn-icon" aria-label="Log out">
             <span className="material-symbols-outlined" aria-hidden="true">logout</span>
           </button>
@@ -718,17 +675,12 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
           Architect
         </button>
         <button
-          className={`${activeTab === 'radar' ? 'active' : ''} ${!isTripCommenced ? 'locked' : ''}`}
-          onClick={() => isTripCommenced && setActiveTab('radar')}
-          disabled={!isTripCommenced}
-          aria-disabled={!isTripCommenced}
+          className={activeTab === 'today' ? 'active' : ''}
+          onClick={() => setActiveTab('today')}
+          aria-current={activeTab === 'today'}
         >
-          {isTripCommenced ? (
-            <span className="radar-dot" aria-hidden="true"></span>
-          ) : (
-            <span className="material-symbols-outlined" aria-hidden="true">lock</span>
-          )}
-          Live Radar
+          {todayTrip && dayOnDate(todayTrip) !== null && <span className="radar-dot" aria-hidden="true"></span>}
+          Today
         </button>
         <button
           className={activeTab === 'archives' ? 'active' : ''}
@@ -850,9 +802,12 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
                       <span className="material-symbols-outlined" aria-hidden="true">edit_note</span>Change
                     </button>
                     <button onClick={() => setSharing(true)} className="btn-secondary tk-share-btn">
-                      <span className="material-symbols-outlined" aria-hidden="true">share</span>Share
+                      <span className="material-symbols-outlined" aria-hidden="true">{trip.share ? 'group' : 'share'}</span>
+                      {trip.share ? `Shared · ${trip.share.members.length}` : 'Share'}
                     </button>
-                    <button onClick={() => { setIsTripCommenced(true); setActiveTab('radar'); }} className="btn-accent">Commence Journey</button>
+                    <button onClick={() => openToday(trip)} className="btn-accent tk-share-btn">
+                      <span className="material-symbols-outlined" aria-hidden="true">today</span>Today mode
+                    </button>
                     <button onClick={() => { setTrip(null); setForm(emptyForm(profile)); }} className="btn-icon-bg" aria-label="Close itinerary">
                       <span className="material-symbols-outlined" aria-hidden="true">close</span>
                     </button>
@@ -881,10 +836,11 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
                       onDismiss={() => updateTrip(trip.id, (t) => ({ ...t, lastChange: null }))} />
                   }
                   onRecheck={() => runChecks(trip)}
+                  mapSlot={<TripMap trip={trip} />}
                   packingSlot={
                     <>
                       <PackingCard trip={trip} onChange={upsertTrip} makeList={() => makePackingList(trip)} busy={packBusy} />
-                      <WalletCard trip={trip} profile={profile} onChange={upsertTrip} />
+                      <WalletCard trip={trip} profile={profile} onChange={upsertTrip} by={firstName} />
                     </>
                   }
                 />
@@ -893,60 +849,32 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
           </>
         )}
 
-        {activeTab === 'radar' && (
-          <div className="radar-view animate-fade-in">
-            <div className="radar-head">
-              <h2>Trip Environmental Briefing</h2>
-              <p>Curated context for <strong>{destination}</strong></p>
-            </div>
-
-            <WeatherTracker destination={destination} />
-
-            <TrafficMap destination={destination} />
-
-            <div className="radar-grid-layout">
-              <div className="alerts-feed">
-                {arr(trip?.plan.days).map((day) => (
-                  <div key={day.day} className="radar-day-section">
-                    <h4>Day {day.day} Contextual Updates</h4>
-                    {arr(day.liveAlerts).map((alert, idx) => (
-                      <div key={idx} className={`alert-card ${String(alert.condition || '').toLowerCase()}`}>
-                        <div className="alert-title">
-                          <span className="material-symbols-outlined" aria-hidden="true">
-                            {alert.condition === 'Crowded'
-                              ? 'groups'
-                              : alert.condition === 'Weather'
-                              ? 'cloudy_snowing'
-                              : alert.condition === 'Closure'
-                              ? 'block'
-                              : 'traffic'}
-                          </span>
-                          {alert.condition || 'Heads-up'} Advisory
-                        </div>
-                        <p>{alert.description}</p>
-                        <div className="pivot">
-                          <strong>Architect's Pivot:</strong> {alert.alternativeSuggestion}
-                        </div>
-                      </div>
+        {activeTab === 'today' && (
+          todayTrip ? (
+            <TodayView trip={todayTrip} onChange={upsertTrip} by={firstName}
+              weatherSlot={(place) => <WeatherTracker destination={place} />}
+              onOpenPlan={() => openArchived(todayTrip)} />
+          ) : (
+            <div className="card tk-card today-empty animate-fade-in">
+              <h2>Today</h2>
+              <p>When you're on a trip, this screen shows the day's drive and plan, a Navigate button for the next stop, road-rule warnings and a quick way to log spends. It opens by itself on trip days and works offline.</p>
+              {archives.length > 0 ? (
+                <>
+                  <p className="tk-dim tk-small">No trip today. Preview one:</p>
+                  <div className="archive-list">
+                    {archives.slice(0, 5).map((t) => (
+                      <button key={t.id} className="card archive-card" onClick={() => openToday(t)}>
+                        <div className="arc-info"><strong>{t.plan.title || t.form.destination}</strong><span>{fmtTripDates(t.form)}</span></div>
+                        <span className="material-symbols-outlined" aria-hidden="true">arrow_forward</span>
+                      </button>
                     ))}
                   </div>
-                ))}
-              </div>
-              <div className="radar-visualization card">
-                <div className="radar-circle">
-                  <div className="radar-sweep"></div>
-                  <div className="radar-blip b1"></div>
-                  <div className="radar-blip b2"></div>
-                </div>
-                <div className="radar-metrics">
-                  <div className="metric"><span>Days</span><strong>{arr(trip?.plan.days).length}</strong></div>
-                  <div className="metric"><span>Advisories</span><strong>{arr(trip?.plan.days).reduce((s, d) => s + arr(d.liveAlerts).length, 0)}</strong></div>
-                  <div className="metric"><span>Hidden gems</span><strong>{arr(trip?.plan.days).reduce((s, d) => s + arr(d.hiddenGems).length, 0)}</strong></div>
-                </div>
-                <p className="radar-note">Advisories are generated with your itinerary as planning guidance. Weather and traffic above are live.</p>
-              </div>
+                </>
+              ) : (
+                <button className="btn-secondary" onClick={() => setActiveTab('planner')}>Plan a trip</button>
+              )}
             </div>
-          </div>
+          )
         )}
 
         {activeTab === 'archives' && (
@@ -968,13 +896,18 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
                   <div key={t.id} className="tk-archive-row">
                     <button className="card archive-card" onClick={() => openArchived(t)}>
                       <div className="arc-info">
-                        <strong>{t.plan.title || t.form.destination}</strong>
+                        <strong>
+                          {t.plan.title || t.form.destination}
+                          {t.share && <span className="tk-chip util tk-shared-chip"><span className="material-symbols-outlined" aria-hidden="true">group</span>Shared</span>}
+                        </strong>
                         <span>{t.form.fromLocation ? `${t.form.fromLocation} → ` : ''}{t.form.destination} • {fmtTripDates(t.form)}</span>
                       </div>
                       <span className="material-symbols-outlined" aria-hidden="true">arrow_forward</span>
                     </button>
                     {confirmDelete === t.id ? (
-                      <button className="btn-secondary tk-danger" onClick={() => deleteArchived(t.id)}>Tap again to delete</button>
+                      <button className="btn-secondary tk-danger" onClick={() => deleteArchived(t)}>
+                        {leaves(t) ? 'Tap again to leave' : t.share ? 'Tap again to delete for everyone' : 'Tap again to delete'}
+                      </button>
                     ) : (
                       <button className="btn-icon-bg" aria-label={`Delete ${t.plan.title || t.form.destination}`} onClick={() => setConfirmDelete(t.id)}>
                         <span className="material-symbols-outlined" aria-hidden="true">delete</span>
@@ -996,7 +929,15 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
         )}
       </main>
 
-      {sharing && trip && <ShareSheet trip={trip} onClose={() => setSharing(false)} />}
+      {sharing && trip && (
+        <ShareSheet trip={trip} onClose={() => setSharing(false)}
+          extra={
+            <TogetherSection trip={trip} uid={user.uid}
+              onShare={() => shareTrip(trip)}
+              onReset={(removeUid) => resetInvite(trip, removeUid)}
+              onLeave={() => deleteArchived(trip)} />
+          } />
+      )}
       {reminding && trip && <RemindersSheet trip={trip} onClose={() => setReminding(false)} />}
       {changeScope !== null && trip && (
         <ChangeSheet trip={trip} initialScope={changeScope} initialText={changeText}
@@ -1031,9 +972,9 @@ const LandingPage = ({ onStart }: { onStart: () => void }) => (
         <p>An AI planner builds road trips with real routes, food stops on the way and a story for every day.</p>
       </div>
       <div className="feature-card card">
-        <span className="material-symbols-outlined feature-icon" aria-hidden="true">radar</span>
-        <h3>Trip Briefing</h3>
-        <p>Context-aware advisories flag likely crowd spikes, weather shifts, and closures along your route.</p>
+        <span className="material-symbols-outlined feature-icon" aria-hidden="true">today</span>
+        <h3>Today Mode</h3>
+        <p>On the road: today's plan, one-tap navigation to the next stop, road-rule warnings and quick spends. Works offline.</p>
       </div>
       <div className="feature-card card">
         <span className="material-symbols-outlined feature-icon" aria-hidden="true">vpn_key</span>
@@ -1094,7 +1035,7 @@ const LoginPage = ({ onLogin }: { onLogin: (n: string) => void }) => {
         <div className="login-card card">
           <span className="material-symbols-outlined xl-icon" aria-hidden="true">explore</span>
           <h1>Sign in</h1>
-          <p>Continue with your Google account to start planning.</p>
+          <p>{store.get(JOIN_KEY, null) ? "You've been invited to plan a trip together. Sign in with Google to join it." : 'Continue with your Google account to start planning.'}</p>
           <button className="btn-primary google-btn" onClick={signIn} disabled={busy}>
             <GoogleIcon /> {busy ? 'Signing in…' : 'Continue with Google'}
           </button>
@@ -1126,7 +1067,9 @@ const LoginPage = ({ onLogin }: { onLogin: (n: string) => void }) => {
 };
 
 const App = () => {
-  const [view, setView] = useState<'landing' | 'login' | 'dashboard'>('landing');
+  // An invite link, or opening the installed app, skips the landing page.
+  const [view, setView] = useState<'landing' | 'login' | 'dashboard'>(() =>
+    store.get(JOIN_KEY, null) || window.matchMedia?.('(display-mode: standalone)').matches ? 'login' : 'landing');
   const [user, setUser] = useState<AppUser | null>(null);
 
   // With Firebase on, auth state is the source of truth for who is signed in.

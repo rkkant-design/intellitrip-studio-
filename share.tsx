@@ -103,7 +103,7 @@ export function buildShareText(trip: SavedTrip, opts: ShareOptions): string {
   return lines.join('\n');
 }
 
-export function ShareSheet({ trip, onClose }: { trip: SavedTrip; onClose: () => void }) {
+export function ShareSheet({ trip, onClose, extra }: { trip: SavedTrip; onClose: () => void; extra?: React.ReactNode }) {
   const [day, setDay] = useState<'all' | number>('all');
   const [links, setLinks] = useState(true);
   const generated = useMemo(() => buildShareText(trip, { day, links }), [trip, day, links]);
@@ -144,6 +144,8 @@ export function ShareSheet({ trip, onClose }: { trip: SavedTrip; onClose: () => 
             <span className="material-symbols-outlined" aria-hidden="true">close</span>
           </button>
         </div>
+        {extra}
+        <h4 className="tk-sub"><span className="material-symbols-outlined" aria-hidden="true">chat</span>Send as a message</h4>
         <div className="tk-row">
           <div className="field tk-grow">
             <label htmlFor="share-day">What to send</label>

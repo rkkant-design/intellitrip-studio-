@@ -12,7 +12,7 @@ import {
   type Expense, type Profile, type SavedTrip, type Wallet, arr, formatINR, fuelUnits, todayStr, addDays,
 } from './tripkit';
 
-const CATEGORIES = ['Fuel', 'Tolls', 'Food', 'Stay', 'Tickets', 'Shopping', 'Local travel', 'Other'];
+export const CATEGORIES = ['Fuel', 'Tolls', 'Food', 'Stay', 'Tickets', 'Shopping', 'Local travel', 'Other'];
 
 // Which spending categories a plan budget line covers, from its wording.
 const BUDGET_MATCH: [RegExp, string[]][] = [
@@ -23,6 +23,13 @@ const BUDGET_MATCH: [RegExp, string[]][] = [
   [/local|transport|parking|taxi|cab|auto/i, ['Local travel']],
   [/shop|souvenir/i, ['Shopping']],
 ];
+
+/** A new expense added to a trip (newest first). `by` is who logged it, on trips shared with family. */
+export function withExpense(trip: SavedTrip, e: Omit<Expense, 'id' | 'at'>): SavedTrip {
+  const w: Wallet = trip.wallet || {};
+  const expense: Expense = { ...e, id: `${Date.now()}${Math.random().toString(36).slice(2, 6)}`, at: new Date().toISOString() };
+  return { ...trip, wallet: { ...w, expenses: [expense, ...arr(w.expenses)] } };
+}
 
 const num = (v: unknown) => {
   const n = parseFloat(String(v ?? '').replace(/[^\d.]/g, ''));
@@ -60,10 +67,10 @@ export function plannedByCategory(trip: SavedTrip) {
   return { planned, total };
 }
 
-const tripDays = (trip: SavedTrip) => Math.max(1, arr(trip.plan.days).length || Number(trip.form.duration) + 1 || 1);
+export const tripDays = (trip: SavedTrip) => Math.max(1, arr(trip.plan.days).length || Number(trip.form.duration) + 1 || 1);
 
 /** The trip day for today's date, or day 1 before the trip and the last day after it. */
-const defaultDay = (trip: SavedTrip) => {
+export const defaultDay = (trip: SavedTrip) => {
   const start = trip.form.startDate;
   if (!start) return 1;
   const today = todayStr();
@@ -71,7 +78,7 @@ const defaultDay = (trip: SavedTrip) => {
   return today > start ? tripDays(trip) : 1;
 };
 
-export function WalletCard({ trip, profile, onChange }: { trip: SavedTrip; profile: Profile; onChange: (t: SavedTrip) => void }) {
+export function WalletCard({ trip, profile, onChange, by }: { trip: SavedTrip; profile: Profile; onChange: (t: SavedTrip) => void; by?: string }) {
   const w: Wallet = trip.wallet || {};
   const fuelType = w.fuelType || profile.fuelType || 'Petrol';
   const units = fuelUnits(fuelType);
@@ -103,8 +110,7 @@ export function WalletCard({ trip, profile, onChange }: { trip: SavedTrip; profi
   const add = () => {
     const value = num(amount);
     if (!value) return;
-    const e: Expense = { id: `${Date.now()}`, amount: Math.round(value), category, day, note: note.trim() || undefined, at: new Date().toISOString() };
-    setWallet({ expenses: [e, ...expenses] });
+    onChange(withExpense(trip, { amount: Math.round(value), category, day, note: note.trim() || undefined, by }));
     setAmount('');
     setNote('');
   };
@@ -229,7 +235,7 @@ export function WalletCard({ trip, profile, onChange }: { trip: SavedTrip; profi
               {expenses.filter((e) => e.day === d).map((e) => (
                 <div key={e.id} className="tk-expense">
                   <span className="tk-chip util">{e.category}</span>
-                  <span className="tk-grow">{e.note || ''}</span>
+                  <span className="tk-grow">{e.note || ''}{e.by && trip.share ? <span className="tk-dim"> · {e.by}</span> : null}</span>
                   <span className="tk-mono">{formatINR(e.amount)}</span>
                   {confirmId === e.id ? (
                     <button className="btn-secondary tk-danger" onClick={() => remove(e.id)}>Delete</button>
