@@ -16,6 +16,8 @@ import { TripMap } from './tripmap';
 import { TodayView, dayOnDate, tripToday } from './today';
 import { TogetherSection } from './together';
 import { InstallCard, useInstall } from './install';
+import { AccountMenu, Logo, MainTabs } from './chrome';
+import { LandingPage, SampleView } from './landing';
 import { WalletCard } from './wallet';
 import { RemindersCard, RemindersSheet } from './reminders';
 import { RoadRulesCard } from './roadcheck';
@@ -81,12 +83,14 @@ if (firebaseEnabled) {
 
 interface AppUser {
   name: string;
+  email?: string;
+  photo?: string;
   uid?: string; // set when signed in with Google; turns on sync
   getToken?: () => Promise<string | null>;
 }
 
 const SYNC_LABEL: Record<SyncStatus, string> = {
-  off: '', connecting: 'Connecting…', saving: 'Saving…', synced: 'Synced', offline: 'Offline · saved here', error: 'Sync problem',
+  off: '', connecting: 'Connecting…', saving: 'Saving…', synced: 'Synced to your Google account', offline: 'Offline: saved on this phone, syncs later', error: 'Sync problem: saved on this device, will retry',
 };
 
 // --- TYPES ---
@@ -128,7 +132,7 @@ const LoadingStage = ({ destination, seconds }: { destination: string; seconds: 
       <div className="spinner" aria-hidden="true"></div>
       <h3>{messages[msg]}</h3>
       <p>Building your journey to {destination} · <span className="tk-mono">{mmss(seconds)}</span></p>
-      <p className="tk-dim tk-small">Usually 2–5 minutes. You can switch tabs or close this page: the trip is saved to Archives when it's ready.</p>
+      <p className="tk-dim tk-small">Usually 2–5 minutes. You can switch tabs or close this page: the trip is saved to My trips when it's ready.</p>
     </div>
   );
 };
@@ -272,7 +276,7 @@ const WeatherTracker = ({ destination }: { destination: string }) => {
 
 // --- MAIN DASHBOARD ---
 
-const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, onLogout }) => {
+const Dashboard: React.FC<{ user: AppUser; onLogout: () => void; onSample: () => void }> = ({ user, onLogout, onSample }) => {
   // A trip happening today opens straight into Today mode.
   const [activeTab, setActiveTab] = useState<ActiveTab>(() => (tripToday(loadArchives()) ? 'today' : 'planner'));
   const [todayId, setTodayId] = useState<string | null>(() => tripToday(loadArchives())?.id ?? null);
@@ -319,7 +323,7 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
     if (store.set(STORAGE_KEY, updated)) return updated;
     const lean = updated.map((t) => ({ ...t, vibeImage: null }));
     if (store.set(STORAGE_KEY, lean)) return lean;
-    showToast('Storage is full. Delete an old trip from Archives and try again.');
+    showToast('Storage is full. Delete an old trip from My trips and try again.');
     return null;
   }, [showToast]);
 
@@ -510,7 +514,7 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
         upsertTrip(saved);
         setTrip(saved);
         setActiveTab('planner');
-        showToast('Your trip is ready and saved to Archives.');
+        showToast('Your trip is ready and saved to My trips.');
       })
       .catch((err: Error) => {
         if (cancelled || err.message === 'cancelled') return;
@@ -635,109 +639,52 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
   return (
     <div className="app-container">
       <header className="main-header">
-        <div className="logo">
-          <span className="material-symbols-outlined" aria-hidden="true">explore</span>
-          <h1>IntelliTrip</h1>
-        </div>
+        <button className="it-logo-btn" onClick={() => setActiveTab(todayTrip && dayOnDate(todayTrip) !== null ? 'today' : 'planner')} aria-label="IntelliTrip home">
+          <Logo />
+        </button>
+        <MainTabs active={activeTab} onSelect={setActiveTab} todayLive={Boolean(todayTrip && dayOnDate(todayTrip) !== null)} />
         <div className="header-actions">
-          {syncStatus !== 'off' && (
-            <span className={`tk-sync ${syncStatus}`} title={syncStatus === 'error' ? 'Changes are saved on this device. Sync will retry; check your connection.' : 'Trips sync to your Google account'}>
-              <span className="material-symbols-outlined" aria-hidden="true">{syncStatus === 'synced' ? 'cloud_done' : syncStatus === 'error' ? 'cloud_off' : 'cloud_sync'}</span>
-              {SYNC_LABEL[syncStatus]}
-            </span>
-          )}
           {canInstall && (
             <button className="btn-secondary tk-install" onClick={async () => { if (await install()) showToast('IntelliTrip is on your home screen.'); }}>
-              <span className="material-symbols-outlined" aria-hidden="true">install_mobile</span>Install app
+              <span className="material-symbols-outlined" aria-hidden="true">install_mobile</span><span className="tk-install-label">Install app</span>
             </button>
           )}
-          <span className="tk-username">{user.name}</span>
-          <button onClick={onLogout} className="btn-icon" aria-label="Log out">
-            <span className="material-symbols-outlined" aria-hidden="true">logout</span>
-          </button>
+          <AccountMenu user={user} syncState={syncStatus} syncLabel={SYNC_LABEL[syncStatus]} onLogout={onLogout} />
         </div>
       </header>
-
-      <nav className="main-nav" aria-label="Primary">
-        <button
-          className={activeTab === 'planner' ? 'active' : ''}
-          onClick={() => setActiveTab('planner')}
-          aria-current={activeTab === 'planner'}
-        >
-          Architect
-        </button>
-        <button
-          className={activeTab === 'today' ? 'active' : ''}
-          onClick={() => setActiveTab('today')}
-          aria-current={activeTab === 'today'}
-        >
-          {todayTrip && dayOnDate(todayTrip) !== null && <span className="radar-dot" aria-hidden="true"></span>}
-          Today
-        </button>
-        <button
-          className={activeTab === 'archives' ? 'active' : ''}
-          onClick={() => setActiveTab('archives')}
-          aria-current={activeTab === 'archives'}
-        >
-          Archives
-        </button>
-        <button
-          className={activeTab === 'toolkit' ? 'active' : ''}
-          onClick={() => setActiveTab('toolkit')}
-          aria-current={activeTab === 'toolkit'}
-        >
-          Toolkit
-        </button>
-      </nav>
 
       <main className="content">
         {activeTab === 'planner' && (
           <>
             {!trip && !pending && (
               <div className="card form-card animate-fade-in">
-                <h2>Plan New Adventure</h2>
-                <div className="grid-2">
+                <h2>Plan a trip</h2>
+                <p className="tk-dim it-form-intro">Tell us where and when. Your travellers and car from Toolkit are used automatically.</p>
+                <div className="it-form-grid">
                   <div className="field">
                     <label htmlFor="fromLocation">From</label>
-                    <input id="fromLocation" name="fromLocation" value={form.fromLocation} onChange={handleInputChange} placeholder="e.g. Madurai" />
+                    <input id="fromLocation" name="fromLocation" value={form.fromLocation} onChange={handleInputChange} placeholder="e.g. Madurai" autoComplete="address-level2" />
                   </div>
                   <div className="field">
                     <label htmlFor="destination">To</label>
-                    <input id="destination" name="destination" value={form.destination} onChange={handleInputChange} placeholder="e.g. Vagamon" />
+                    <input id="destination" name="destination" value={form.destination} onChange={handleInputChange} placeholder="e.g. Thekkady" />
                   </div>
-                </div>
-                <div className="grid-2">
                   <div className="field">
-                    <label htmlFor="startDate">Start Date</label>
+                    <label htmlFor="startDate">Start date</label>
                     <input id="startDate" type="date" name="startDate" value={form.startDate} onChange={handleInputChange} />
                   </div>
                   <div className="field">
                     <label htmlFor="duration">Nights</label>
-                    <input id="duration" type="number" name="duration" value={form.duration} onChange={handleInputChange} min="1" max="30" />
+                    <input id="duration" type="number" inputMode="numeric" name="duration" value={form.duration} onChange={handleInputChange} min="1" max="30" />
                   </div>
-                </div>
-                <div className="grid-3">
                   <div className="field">
                     <label htmlFor="adults">Adults</label>
-                    <input id="adults" type="number" name="adults" value={form.adults} onChange={handleInputChange} min="1" />
+                    <input id="adults" type="number" inputMode="numeric" name="adults" value={form.adults} onChange={handleInputChange} min="1" />
                   </div>
                   <div className="field">
                     <label htmlFor="children">Children</label>
-                    <input id="children" type="number" name="children" value={form.children} onChange={handleInputChange} min="0" />
+                    <input id="children" type="number" inputMode="numeric" name="children" value={form.children} onChange={handleInputChange} min="0" />
                   </div>
-                  <div className="field">
-                    <label htmlFor="travelType">Vibe</label>
-                    <select id="travelType" name="travelType" value={form.travelType} onChange={handleInputChange}>
-                      <option value="Family">Family Friendly</option>
-                      <option value="Luxury">Luxury</option>
-                      <option value="Adventure">Adventure</option>
-                      <option value="Solo">Solo</option>
-                      <option value="Group">Group</option>
-                      <option value="Romantic">Romantic</option>
-                    </select>
-                  </div>
-                </div>
-                <div className="grid-3">
                   <div className="field">
                     <label htmlFor="mode">How you're travelling</label>
                     <select id="mode" name="mode" value={form.mode} onChange={handleInputChange}>
@@ -747,29 +694,54 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
                     </select>
                   </div>
                   <div className="field">
-                    <label htmlFor="maxDrive">Most driving a day</label>
+                    <label htmlFor="leaveAt">Leave home at <span className="it-optional">optional</span></label>
+                    <input id="leaveAt" type="time" name="leaveAt" value={form.leaveAt || ''} onChange={handleInputChange} />
+                  </div>
+                  <div className="field it-span-2">
+                    <label htmlFor="maxDrive">Most driving in a day</label>
                     <select id="maxDrive" name="maxDrive" value={form.maxDrive} onChange={handleInputChange}>
                       {['3 hours', '5 hours', '7 hours', '9 hours'].map((o) => <option key={o}>{o}</option>)}
                     </select>
                   </div>
-                  <div className="field">
-                    <label htmlFor="budget">Budget</label>
-                    <select id="budget" name="budget" value={form.budget} onChange={handleInputChange}>
-                      {['Budget', 'Mid-range', 'Comfortable', 'Splurge'].map((o) => <option key={o}>{o}</option>)}
-                    </select>
+                </div>
+                <details className="it-prefs">
+                  <summary>
+                    <span className="material-symbols-outlined" aria-hidden="true">tune</span>
+                    <span className="tk-grow">Trip preferences</span>
+                    <span className="tk-dim tk-small">{[form.travelType, form.budget, form.food].filter(Boolean).join(' · ')}</span>
+                  </summary>
+                  <div className="it-form-grid">
+                    <div className="field">
+                      <label htmlFor="travelType">Kind of trip</label>
+                      <select id="travelType" name="travelType" value={form.travelType} onChange={handleInputChange}>
+                        <option value="Family">Family</option>
+                        <option value="Luxury">Luxury</option>
+                        <option value="Adventure">Adventure</option>
+                        <option value="Solo">Solo</option>
+                        <option value="Group">Friends</option>
+                        <option value="Romantic">Couple</option>
+                      </select>
+                    </div>
+                    <div className="field">
+                      <label htmlFor="budget">Budget</label>
+                      <select id="budget" name="budget" value={form.budget} onChange={handleInputChange}>
+                        {['Budget', 'Mid-range', 'Comfortable', 'Splurge'].map((o) => <option key={o}>{o}</option>)}
+                      </select>
+                    </div>
+                    <div className="field it-span-2">
+                      <label htmlFor="food">Food</label>
+                      <input id="food" name="food" value={form.food} onChange={handleInputChange} placeholder="e.g. South Indian vegetarian" />
+                    </div>
+                    <div className="field it-span-2">
+                      <label htmlFor="idealTripDescription">Anything else? <span className="it-optional">optional</span></label>
+                      <textarea id="idealTripDescription" name="idealTripDescription" value={form.idealTripDescription} onChange={handleInputChange} placeholder="e.g. quiet viewpoints, an elderly parent, a wedding at 6 pm on day 2, avoid long walks" />
+                    </div>
                   </div>
-                </div>
-                <div className="field">
-                  <label htmlFor="food">Food preference</label>
-                  <input id="food" name="food" value={form.food} onChange={handleInputChange} placeholder="e.g. South Indian vegetarian" />
-                </div>
-                <div className="field">
-                  <label htmlFor="idealTripDescription">Describe your ideal experience</label>
-                  <textarea id="idealTripDescription" name="idealTripDescription" value={form.idealTripDescription} onChange={handleInputChange} placeholder="e.g. Quiet viewpoints, good local food on the way, elderly parent, avoid long walks..." />
-                </div>
+                </details>
                 {error && <p className="error" role="alert">{error}</p>}
-                <button className="btn-primary" onClick={generateItinerary}>Curate Journey</button>
-                <p className="tk-dim tk-small tk-center">Your travellers and car from the Toolkit tab are used automatically.</p>
+                <button className="btn-primary" onClick={generateItinerary}>Create my plan</button>
+                <button className="btn-secondary it-form-sample" onClick={onSample}>Not sure what you'll get? See a sample trip</button>
+                <p className="tk-dim tk-small tk-center">Takes 2 to 5 minutes. You can close the app meanwhile; the plan is saved to My trips.</p>
               </div>
             )}
 
@@ -786,7 +758,7 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
                     <p>{trip.plan.summary}</p>
                   </div>
                   <div className="action-btns">
-                    <span className="tk-saved" title="Saved in Archives on this device">
+                    <span className="tk-saved" title="Saved in My trips">
                       <span className="material-symbols-outlined" aria-hidden="true">check_circle</span>Saved
                     </span>
                     <button onClick={() => setChangeScope('all')} className="btn-secondary tk-share-btn" disabled={Boolean(pendingChange)}
@@ -872,8 +844,8 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
         {activeTab === 'archives' && (
           <div className="archives-view animate-fade-in">
             <div className="tk-archive-head">
-              <h2>Your Journey Archives</h2>
-              <button className="btn-secondary" onClick={() => importRef.current?.click()}>Import Trip Kit trips</button>
+              <h2>My trips</h2>
+              <button className="btn-secondary" onClick={() => importRef.current?.click()}>Import laptop trips</button>
               <input ref={importRef} type="file" accept=".json,application/json" multiple hidden onChange={(e) => importTripKit(e.target.files)} />
             </div>
             <p className="tk-dim tk-small">
@@ -881,7 +853,7 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
               {' '}To bring in trips from the laptop Trip Kit app, pick their files from <code>C:\Users\kamal\Apps\TripKit\data\trips</code>.
             </p>
             {archives.length === 0 ? (
-              <p className="empty-msg">No journeys preserved yet.</p>
+              <p className="empty-msg">No trips yet. Plan one and it's saved here.</p>
             ) : (
               <div className="archive-list">
                 {archives.map((t) => (
@@ -949,49 +921,14 @@ const fmtTripDates = (f: FormState) => {
   return `${a} – ${b}`;
 };
 
-const LandingInstall = () => {
+const InstallButton = () => {
   const { canInstall, install } = useInstall();
   return canInstall ? (
-    <button className="btn-secondary tk-install tk-landing-install" onClick={() => install()}>
-      <span className="material-symbols-outlined" aria-hidden="true">install_mobile</span>Install app
+    <button className="btn-secondary tk-install" onClick={() => install()}>
+      <span className="material-symbols-outlined" aria-hidden="true">install_mobile</span><span className="tk-install-label">Install app</span>
     </button>
   ) : null;
 };
-
-const LandingPage = ({ onStart }: { onStart: () => void }) => (
-  <div className="landing-screen">
-    <div className="landing-hero animate-fade-in">
-      <span className="material-symbols-outlined xl-icon" aria-hidden="true">explore</span>
-      <h1>IntelliTrip</h1>
-      <p className="hero-subtitle">High-fidelity AI Travel Architecture</p>
-      <button className="btn-primary mega-btn" onClick={onStart}>Initialize Architect</button>
-      <LandingInstall />
-    </div>
-
-    <section className="features-grid container">
-      <div className="feature-card card">
-        <span className="material-symbols-outlined feature-icon" aria-hidden="true">auto_awesome</span>
-        <h3>AI Architecture</h3>
-        <p>An AI planner builds road trips with real routes, food stops on the way and a story for every day.</p>
-      </div>
-      <div className="feature-card card">
-        <span className="material-symbols-outlined feature-icon" aria-hidden="true">today</span>
-        <h3>Today Mode</h3>
-        <p>On the road: today's plan, one-tap navigation to the next stop, road-rule warnings and quick spends. Works offline.</p>
-      </div>
-      <div className="feature-card card">
-        <span className="material-symbols-outlined feature-icon" aria-hidden="true">vpn_key</span>
-        <h3>Local Secrets</h3>
-        <p>Lesser-known places worth the detour, and a "Hero Moment" for every stop, each one a tap away in Google Maps.</p>
-      </div>
-      <div className="feature-card card">
-        <span className="material-symbols-outlined feature-icon" aria-hidden="true">account_balance_wallet</span>
-        <h3>Budget Logic</h3>
-        <p>Cost estimates in INR, booking deadlines, packing lists and a leave-home checklist.</p>
-      </div>
-    </section>
-  </div>
-);
 
 const GoogleIcon = () => (
   <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
@@ -1004,74 +941,81 @@ const GoogleIcon = () => (
 
 // Firebase-backed Google sign-in. Falls back to a name-only login when Firebase
 // is not configured, so the app still works before provisioning.
-const LoginPage = ({ onLogin }: { onLogin: (n: string) => void }) => {
+const LoginPage = ({ onLogin, onBack, onSample }: { onLogin: (n: string) => void; onBack: () => void; onSample: () => void }) => {
   const [name, setName] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const invited = Boolean(store.get(JOIN_KEY, null));
 
-  if (firebaseEnabled && auth) {
-    const signIn = async () => {
-      setBusy(true);
-      setError(null);
+  const signIn = async () => {
+    if (!auth) return;
+    setBusy(true);
+    setError(null);
+    try {
       try {
-        try {
-          await signInWithPopup(auth, new GoogleAuthProvider());
-        } catch (e: any) {
-          // Some phone browsers block pop-ups: sign in on a full page instead.
-          if (e?.code === 'auth/popup-blocked' || e?.code === 'auth/operation-not-supported-in-this-environment') {
-            await signInWithRedirect(auth, new GoogleAuthProvider());
-            return;
-          }
-          throw e;
-        }
-        // onAuthStateChanged in <App> handles the transition to the dashboard.
+        await signInWithPopup(auth, new GoogleAuthProvider());
       } catch (e: any) {
-        if (e?.code !== 'auth/popup-closed-by-user' && e?.code !== 'auth/cancelled-popup-request') {
-          setError(e?.message || 'Sign-in failed. Please try again.');
+        // Some phone browsers block pop-ups: sign in on a full page instead.
+        if (e?.code === 'auth/popup-blocked' || e?.code === 'auth/operation-not-supported-in-this-environment') {
+          await signInWithRedirect(auth, new GoogleAuthProvider());
+          return;
         }
-      } finally {
-        setBusy(false);
+        throw e;
       }
-    };
-    return (
-      <div className="login-screen">
-        <div className="login-card card">
-          <span className="material-symbols-outlined xl-icon" aria-hidden="true">explore</span>
-          <h1>Sign in</h1>
-          <p>{store.get(JOIN_KEY, null) ? "You've been invited to plan a trip together. Sign in with Google to join it." : 'Continue with your Google account to start planning.'}</p>
-          <button className="btn-primary google-btn" onClick={signIn} disabled={busy}>
-            <GoogleIcon /> {busy ? 'Signing in…' : 'Continue with Google'}
-          </button>
-          {error && <p className="error" role="alert">{error}</p>}
-        </div>
-      </div>
-    );
-  }
+      // onAuthStateChanged in <App> handles the move to the app.
+    } catch (e: any) {
+      if (e?.code !== 'auth/popup-closed-by-user' && e?.code !== 'auth/cancelled-popup-request') {
+        setError(e?.message || 'Sign-in failed. Please try again.');
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
-    <div className="login-screen">
-      <div className="login-card card">
-        <span className="material-symbols-outlined xl-icon" aria-hidden="true">account_circle</span>
-        <h1>Welcome</h1>
-        <p>Enter your explorer identity to begin.</p>
-        <label className="sr-only" htmlFor="explorerName">Explorer name</label>
-        <input
-          id="explorerName"
-          autoFocus
-          placeholder="Explorer Name"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && onLogin(name.trim() || 'Explorer')}
-        />
-        <button className="btn-primary" onClick={() => onLogin(name.trim() || 'Explorer')}>Enter Workspace</button>
-      </div>
+    <div className="it-landing">
+      <header className="it-public-head">
+        <button className="btn-secondary it-back" onClick={onBack}>
+          <span className="material-symbols-outlined" aria-hidden="true">arrow_back</span>Home
+        </button>
+        <Logo small />
+        <span className="it-head-spacer" aria-hidden="true" />
+      </header>
+      <main className="login-screen">
+        <div className="login-card card">
+          <h1>{invited ? 'Join the trip' : 'Sign in to plan'}</h1>
+          <p className="tk-dim">
+            {invited
+              ? "You've been invited to plan a trip together. Sign in with Google to join it."
+              : 'Your trips save to your Google account and appear on every phone and laptop you sign in on.'}
+          </p>
+          {firebaseEnabled && auth ? (
+            <button className="btn-primary google-btn" onClick={signIn} disabled={busy}>
+              <GoogleIcon /> {busy ? 'Signing in…' : 'Continue with Google'}
+            </button>
+          ) : (
+            <>
+              <div className="field">
+                <label htmlFor="explorerName">Your name</label>
+                <input id="explorerName" autoFocus placeholder="e.g. Kamal" value={name}
+                  onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && onLogin(name.trim() || 'Traveller')} />
+              </div>
+              <button className="btn-primary" onClick={() => onLogin(name.trim() || 'Traveller')}>Continue</button>
+            </>
+          )}
+          {error && <p className="error" role="alert">{error}</p>}
+          {!invited && <button className="btn-secondary it-login-sample" onClick={onSample}>Or look at a sample trip first</button>}
+        </div>
+      </main>
     </div>
   );
 };
 
+type View = 'landing' | 'login' | 'sample' | 'dashboard';
+
 const App = () => {
-  // An invite link, or opening the installed app, skips the landing page.
-  const [view, setView] = useState<'landing' | 'login' | 'dashboard'>(() =>
+  // An invite link, or opening the installed app, skips the home page.
+  const [view, setView] = useState<View>(() =>
     store.get(JOIN_KEY, null) || window.matchMedia?.('(display-mode: standalone)').matches ? 'login' : 'landing');
   const [user, setUser] = useState<AppUser | null>(null);
 
@@ -1081,11 +1025,14 @@ const App = () => {
     const unsub = onAuthStateChanged(auth, (fbUser) => {
       if (fbUser) {
         setUser({
-          name: fbUser.displayName || fbUser.email || 'Explorer',
+          name: fbUser.displayName || fbUser.email || 'Traveller',
+          email: fbUser.email || undefined,
+          photo: fbUser.photoURL || undefined,
           uid: fbUser.uid,
           getToken: () => fbUser.getIdToken(),
         });
-        setView('dashboard');
+        // Someone reading the sample stays on it; everyone else goes into the app.
+        setView((v) => (v === 'sample' ? v : 'dashboard'));
       } else {
         setUser(null);
         setView((v) => (v === 'dashboard' ? 'login' : v));
@@ -1094,19 +1041,23 @@ const App = () => {
     return unsub;
   }, []);
 
+  useEffect(() => { window.scrollTo(0, 0); }, [view]);
+
   const handleLogout = () => {
-    if (firebaseEnabled && auth) {
-      signOut(auth);
-      setView('landing');
-    } else {
-      setUser(null);
-      setView('landing');
-    }
+    if (firebaseEnabled && auth) signOut(auth);
+    else setUser(null);
+    setView('landing');
   };
 
-  if (view === 'landing') return <LandingPage onStart={() => setView('login')} />;
-  if (view === 'login') return <LoginPage onLogin={(n) => { setUser({ name: n }); setView('dashboard'); }} />;
-  return <Dashboard user={user!} onLogout={handleLogout} />;
+  const start = () => setView(user ? 'dashboard' : 'login');
+  const startLabel = user ? 'Open my trips' : 'Plan a trip';
+  if (view === 'landing') return <LandingPage onStart={start} onSample={() => setView('sample')} startLabel={startLabel} headExtra={<InstallButton />} />;
+  if (view === 'sample') return <SampleView onBack={() => setView(user ? 'dashboard' : 'landing')} onStart={start} startLabel={user ? 'Open my trips' : 'Plan my own'} />;
+  if (view === 'login' || !user) {
+    return <LoginPage onBack={() => setView('landing')} onSample={() => setView('sample')}
+      onLogin={(n) => { setUser({ name: n }); setView('dashboard'); }} />;
+  }
+  return <Dashboard user={user} onLogout={handleLogout} onSample={() => setView('sample')} />;
 };
 
 const root = createRoot(document.getElementById('root')!);

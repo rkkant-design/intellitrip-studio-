@@ -62,7 +62,13 @@ dir, and redirects).
 
 ## Tabs
 
-- **Architect** plans a trip: from/to, dates, travellers, vibe, how you're travelling, most
+On a phone the tabs are a bottom bar; on a laptop they sit in the header next to your
+account (avatar, name, sync status, Sign out). Signed out, the home page leads with a real
+sample trip (`sample-trip.json`, made by the planner and map-checked), which anyone can open
+without an account.
+
+
+- **Plan** plans a trip: from/to, dates, travellers, vibe, how you're travelling, most
   driving per day, budget and food. The plan shows a Road Trip section (route options,
   stop-by-stop drives with Google Maps links, where to eat, driving tips, a warning when a
   drive exceeds your daily limit), day cards with hidden gems and Hero Moments, a stay pick,
@@ -73,8 +79,8 @@ dir, and redirects).
   weather and today's map with live traffic. It works offline once the app is installed.
 - The plan view has a **Trip Map**: each day's real road (from the map check) in its own colour,
   with pins for the stay, food stops, sights and hidden gems (Mapbox GL; `VITE_MAPBOX_TOKEN`).
-- **Archives** keeps every plan in this browser and imports trip files from the laptop
-  Trip Kit app.
+- **My trips** keeps every plan (synced to your Google account when signed in) and imports
+  trip files from the laptop Trip Kit app.
 - **Toolkit** holds the Travellers profile (used by every plan), the Book By calculator and
   the Leave-Home checklist. These work without AI.
 

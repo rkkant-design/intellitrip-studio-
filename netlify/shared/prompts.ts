@@ -95,6 +95,7 @@ export interface TripRequest {
   budget?: string;
   food?: string;
   idealTripDescription?: string;
+  leaveAt?: string;
   profile?: Profile;
 }
 
@@ -126,6 +127,7 @@ export function tripContext(req: TripRequest): string {
     `Food: ${clip(req.food, 120) || clip(p.food, 120) || 'not specified'}`,
     `How they're travelling: ${clip(req.mode, 60) || 'Road trip in our own car'}`,
     `Most driving they want in a day: ${clip(req.maxDrive, 20) || '5 hours'}`,
+    `Leaving home on day 1 at: ${clip(req.leaveAt, 10) ? `${clip(req.leaveAt, 10)} (fixed: plan day 1 from this time and set roadTrip.departAt to it)` : 'not fixed (suggest the best time in roadTrip.departAt)'}`,
     `Vehicle: ${clip(p.vehicle, 80) || 'car (type not given)'}`,
     `Always carry: ${clip(p.alwaysCarry, 200) || 'nothing specific'}`,
     `What they want from the trip: ${clip(req.idealTripDescription, 800) || 'a memorable, well-paced trip'}`,
@@ -164,7 +166,7 @@ export type ReviseScope = 'all' | number;
 const DETAIL_LABELS: [keyof TripRequest, string][] = [
   ['fromLocation', 'Starting from'], ['destination', 'Destination'], ['startDate', 'Start date'], ['duration', 'Nights'],
   ['adults', 'Adults'], ['children', 'Children'], ['mode', "How they're travelling"], ['maxDrive', 'Most driving in a day'],
-  ['budget', 'Budget'], ['food', 'Food'],
+  ['budget', 'Budget'], ['food', 'Food'], ['leaveAt', 'Leaving home at'],
 ];
 
 /** "Starting from: Chennai → Madurai" lines for every trip detail that changed. */

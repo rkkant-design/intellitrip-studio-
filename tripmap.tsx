@@ -16,7 +16,7 @@ import { type SavedTrip, arr } from './tripkit';
 
 const MAPBOX_TOKEN = (import.meta as any).env?.VITE_MAPBOX_TOKEN as string | undefined;
 
-export const DAY_COLORS = ['#58a6ff', '#f2cc60', '#3fb950', '#f778ba', '#a371f7', '#ff9f43', '#39c5cf', '#ff6b6b'];
+export const DAY_COLORS = ['#0F766E', '#B45309', '#2453FF', '#BE185D', '#7C3AED', '#C2410C', '#0E7490', '#4D7C0F'];
 export const dayColor = (day: number) => DAY_COLORS[(Math.max(1, day) - 1) % DAY_COLORS.length];
 
 export type PinKind = 'stay' | 'food' | 'sight' | 'gem';
@@ -73,11 +73,12 @@ export function mapData(trip: SavedTrip): { roads: Road[]; pins: Pin[] } {
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]!));
 
-export function TripMap({ trip, day = 'all', traffic = false, compact = false }: {
+export function TripMap({ trip, day = 'all', traffic = false, compact = false, bare = false }: {
   trip: SavedTrip;
   day?: 'all' | number;
   traffic?: boolean;
   compact?: boolean;
+  bare?: boolean; // just the map, for the home page's sample trip
 }) {
   const { roads, pins } = useMemo(() => mapData(trip), [trip.checks, trip.plan]);
   const [shown, setShown] = useState<'all' | number>(day);
@@ -106,17 +107,19 @@ export function TripMap({ trip, day = 'all', traffic = false, compact = false }:
     mapboxgl.accessToken = MAPBOX_TOKEN;
     const m = new mapboxgl.Map({
       container: box.current,
-      style: 'mapbox://styles/mapbox/dark-v11',
+      style: 'mapbox://styles/mapbox/outdoors-v12',
       center: [78.5, 11],
       zoom: 6,
       attributionControl: true,
-      cooperativeGestures: compact,
+      cooperativeGestures: compact || bare,
     });
-    m.addControl(new mapboxgl.NavigationControl({ showCompass: false }), 'top-right');
-    m.addControl(new mapboxgl.GeolocateControl({ trackUserLocation: true, showUserHeading: true }), 'top-right');
+    if (!bare) {
+      m.addControl(new mapboxgl.NavigationControl({ showCompass: false }), 'top-right');
+      m.addControl(new mapboxgl.GeolocateControl({ trackUserLocation: true, showUserHeading: true }), 'top-right');
+    }
     m.on('load', () => {
       m.addSource('roads', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
-      m.addLayer({ id: 'roads-casing', type: 'line', source: 'roads', layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#0a0c10', 'line-width': 7, 'line-opacity': 0.8 } });
+      m.addLayer({ id: 'roads-casing', type: 'line', source: 'roads', layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#ffffff', 'line-width': 8, 'line-opacity': 0.95 } });
       m.addLayer({ id: 'roads', type: 'line', source: 'roads', layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': ['get', 'color'], 'line-width': 4 } });
       setReady(true);
     });
@@ -128,7 +131,7 @@ export function TripMap({ trip, day = 'all', traffic = false, compact = false }:
       map.current = null;
       setReady(false);
     };
-  }, [online, hasContent, compact]);
+  }, [online, hasContent, compact, bare]);
 
   // Live traffic on the roads, when asked for.
   useEffect(() => {
@@ -163,7 +166,7 @@ export function TripMap({ trip, day = 'all', traffic = false, compact = false }:
     markers.current = pinsNow.map((p) => {
       const el = document.createElement('div');
       el.className = `tm-pin ${p.kind}`;
-      el.style.setProperty('--pin', p.day ? dayColor(p.day) : '#a371f7');
+      el.style.setProperty('--pin', p.day ? dayColor(p.day) : '#15202B');
       el.innerHTML = `<span class="material-symbols-outlined" aria-hidden="true">${PIN_ICON[p.kind]}</span>`;
       el.setAttribute('aria-label', `${PIN_LABEL[p.kind]}: ${p.name}`);
       const popup = new mapboxgl.Popup({ offset: 16, closeButton: false, className: 'tm-popup' }).setHTML(
@@ -181,6 +184,12 @@ export function TripMap({ trip, day = 'all', traffic = false, compact = false }:
   }, [ready, shown, roads, pins, compact]);
 
   const roadKm = roads.filter((r) => shown === 'all' || r.day === shown).reduce((s, r) => s + r.km, 0);
+
+  if (bare) {
+    return hasContent && MAPBOX_TOKEN && online
+      ? <div ref={box} className="tm-map tm-bare" role="region" aria-label="Map of the sample trip's first day" />
+      : <div className="tm-bare tm-bare-empty" aria-hidden="true"><span className="material-symbols-outlined">map</span></div>;
+  }
 
   return (
     <div className={`card tk-card tm-card ${compact ? 'compact' : ''}`}>

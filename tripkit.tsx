@@ -29,6 +29,7 @@ export interface FormState {
   budget: string;
   food: string;
   idealTripDescription: string;
+  leaveAt?: string; // "06:30": when they want to leave home on day 1; empty lets the planner suggest
 }
 
 export interface Place { name?: string; mapsQuery?: string }
@@ -189,7 +190,7 @@ export const saveProfile = (p: Profile) => store.set(PROFILE_KEY, p);
 export const emptyForm = (profile: Profile): FormState => ({
   fromLocation: profile.homeCity || '', destination: '', startDate: '', duration: 3, adults: 2, children: 0,
   travelType: 'Family', mode: 'Road trip in our own car', maxDrive: '5 hours', budget: 'Mid-range', food: profile.food || '',
-  idealTripDescription: '',
+  idealTripDescription: '', leaveAt: '',
 });
 
 // --- HELPERS ---

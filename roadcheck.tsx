@@ -55,7 +55,7 @@ export function legStart(trip: SavedTrip, leg: Leg, index: number): { min: numbe
   const rt = trip.plan.roadTrip && typeof trip.plan.roadTrip === 'object' ? trip.plan.roadTrip : null;
   const dayNo = leg.day ?? index + 1;
   const day = arr(trip.plan.days).find((d) => d.day === dayNo);
-  const fromDepart = dayNo === 1 ? firstTime(rt?.departAt) : null;
+  const fromDepart = dayNo === 1 ? firstTime(trip.form.leaveAt) ?? firstTime(rt?.departAt) : null;
   if (fromDepart !== null) return { min: fromDepart, assumed: false };
   for (const a of arr(day?.activities)) {
     const t = firstTime(a.time);

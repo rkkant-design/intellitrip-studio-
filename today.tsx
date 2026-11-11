@@ -11,7 +11,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { placeKey, routeStops } from './placecheck';
 import { LEVEL_LABEL, assess, firstTime, fmt, legStart } from './roadcheck';
-import { TripMap, dayColor, navigateUrl } from './tripmap';
+import { TripMap, navigateUrl } from './tripmap';
 import { type Leg, type SavedTrip, addDays, arr, formatINR, todayStr } from './tripkit';
 import { CATEGORIES, tripDays, withExpense } from './wallet';
 
@@ -79,6 +79,8 @@ export function itemsFor(trip: SavedTrip, day: number): TodayItem[] {
   arr(d?.activities).forEach((a, i) => {
     const key = a.mapsQuery ? `stop-${placeKey(a)}` : `act${i}`;
     if (seen.has(key)) return;
+    // "Drive Madurai to Thekkady" repeats the day's drive, which is already listed from the road trip.
+    if (lists.length && /^(drive|depart|leave|start the drive|set off)\b/i.test(`${a.name || ''} ${a.description || ''}`.trim())) return;
     const t = firstTime(a.time);
     last = t !== null ? t : last + 1;
     acts.push({
@@ -167,20 +169,19 @@ export function TodayView({ trip, onChange, by, weatherSlot, onOpenPlan }: {
   return (
     <div className="today animate-fade-in">
       <div className="today-head">
-        <button className="btn-icon-bg" aria-label="Previous day" disabled={day <= 1} onClick={() => setDay(day - 1)}>
-          <span className="material-symbols-outlined" aria-hidden="true">chevron_left</span>
-        </button>
-        <div className="today-title">
-          <span className="day-num" style={{ background: dayColor(day) }}>Day {day} of {total}</span>
-          <h2>{plan?.title || trip.plan.title || trip.form.destination}</h2>
-          <p className="tk-dim tk-small">
-            {date ? new Date(date + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'short' }) : ''}
-            {day === liveDay ? ' · today' : liveDay === null ? ' · preview' : ''} · {trip.plan.title || trip.form.destination}
-          </p>
-        </div>
-        <button className="btn-icon-bg" aria-label="Next day" disabled={day >= total} onClick={() => setDay(day + 1)}>
-          <span className="material-symbols-outlined" aria-hidden="true">chevron_right</span>
-        </button>
+        <p className="today-trip tk-dim">{trip.plan.title || `${trip.form.fromLocation} → ${trip.form.destination}`}</p>
+        <h2>{plan?.title || `Day ${day}`}</h2>
+        <p className="tk-dim tk-small">
+          {date ? new Date(date + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'short' }) : ''}
+          {liveDay === null ? ' · preview' : ''}
+        </p>
+      </div>
+      <div className="today-days" role="tablist" aria-label="Trip day">
+        {Array.from({ length: total }, (_, k) => k + 1).map((d) => (
+          <button key={d} role="tab" aria-selected={d === day} className={`today-day ${d === day ? 'on' : ''}`} onClick={() => setDay(d)}>
+            Day {d}{d === liveDay ? ' · Today' : ''}
+          </button>
+        ))}
       </div>
 
       {findings.map((f, i) => (

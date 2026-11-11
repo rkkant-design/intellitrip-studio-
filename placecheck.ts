@@ -142,7 +142,7 @@ const stats = { answered: 0 };
 async function getJson(url: string) {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      const res = await fetch(url);
+      const res = await fetch(url, { signal: AbortSignal.timeout(15_000) });
       if (res.ok) {
         stats.answered++;
         return await res.json();
@@ -408,9 +408,13 @@ export async function checkPlan(
   const region = destPt || fromPt;
   const ignore = [townOnly(from), townOnly(destination)];
   const results: Record<string, PlaceCheck> = {};
-  // One lookup at a time keeps us well inside Photon's fair use.
+  // One lookup at a time keeps us well inside Photon's fair use. When it stops answering
+  // (three places in a row), the rest are left unchecked so the drives still get measured.
+  let silent = 0;
   for (const item of places) {
-    results[placeKey(item.p)] = await findPlace(item.p, item.kind, region, ignore);
+    const found = silent >= 3 ? { status: 'unchecked' as const } : await findPlace(item.p, item.kind, region, ignore);
+    silent = found.status === 'unchecked' ? silent + 1 : 0;
+    results[placeKey(item.p)] = found;
     tick();
   }
 
