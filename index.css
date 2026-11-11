@@ -806,3 +806,13 @@ h1, h2, h3 { color: var(--text-bright); letter-spacing: -0.01em; }
 .it-sample-rules { display: flex; gap: 0.5rem; align-items: flex-start; color: var(--text); background: var(--surface-2); border-radius: 12px; padding: 0.6rem 0.75rem; }
 .it-sample-rules .material-symbols-outlined { color: var(--primary); font-size: 1.15rem; flex: none; margin-top: 1px; }
 .tm-loading { background: #E8EFE6; }
+
+/* --- Road rule evidence grades --- */
+.tk-rule-meta { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; font-size: 0.78rem; }
+.tk-grade { font-weight: 700; padding: 0.1rem 0.5rem; border-radius: 999px; }
+.tk-grade.grade-A { background: #EEF7F0; color: var(--success); }
+.tk-grade.grade-B { background: var(--primary-tint); color: var(--primary-dark); }
+.tk-grade.grade-C { background: var(--accent-tint); color: var(--accent-text); }
+
+.it-alerts { display: flex; flex-direction: column; gap: 0.5rem; }
+.it-alerts.compact .tk-sub { margin-top: 0; }

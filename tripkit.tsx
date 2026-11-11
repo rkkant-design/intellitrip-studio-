@@ -10,6 +10,7 @@
 
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { type Checks, detour, placeKey, placesIn, routeStops } from './placecheck';
+import { STATE_NAMES } from './roadrules';
 
 // Map-check results for the trip on screen, so every place name can show its badge.
 const ChecksContext = createContext<Checks | null>(null);
@@ -150,6 +151,13 @@ export interface Profile {
   food: string;
   budgetPerDay: string;
   alwaysCarry: string;
+  // The car, for road rules that depend on it (entry taxes, age limits, pollution rules, permit routes).
+  regState?: string; // registration state code, e.g. "TN"
+  regYear?: string;
+  bsNorm?: string; // BS-VI | BS-IV | BS-III
+  clearance?: string; // "low" | "normal" | "high"
+  carType?: string; // Own car | Rented self-drive | Hired cab with driver
+  fastag?: string; // FASTag | FASTag with Annual Pass | No FASTag
   travellers: { name: string; age: string; food: string; notes: string }[];
   updatedAt?: number;
 }
@@ -198,6 +206,22 @@ export const DEFAULT_PROFILE: Profile = {
   homeCity: '', vehicle: '', fuelType: 'Petrol', mileage: '', fuelPrice: '', pace: 'Balanced', food: '', budgetPerDay: '', alwaysCarry: '',
   travellers: [{ name: '', age: '', food: '', notes: '' }],
 };
+/** Diet choices asked per traveller, instead of assuming one for the family. */
+export const DIETS = ['Vegetarian', 'Eggetarian', 'Non-vegetarian', 'Jain', 'Vegan', 'Halal', 'No beef', 'No pork'];
+
+const CLEARANCE_MM: Record<string, number> = { low: 160, normal: 180, high: 200 };
+
+/** The car as the road-rule check needs it. */
+export function carInfo(p: Profile) {
+  return {
+    regState: p.regState || undefined,
+    regYear: Number(p.regYear) || undefined,
+    fuelType: p.fuelType || undefined,
+    bsNorm: p.bsNorm || undefined,
+    clearanceMm: p.clearance ? CLEARANCE_MM[p.clearance] : undefined,
+  };
+}
+
 export const loadProfile = (): Profile => ({ ...DEFAULT_PROFILE, ...store.get<Partial<Profile>>(PROFILE_KEY, {}) });
 export const saveProfile = (p: Profile) => store.set(PROFILE_KEY, p);
 
@@ -829,7 +853,7 @@ export function TravellersCard({ profile, onSave }: { profile: Profile; onSave: 
       <h3 className="tk-h3"><span className="material-symbols-outlined" aria-hidden="true">group</span>Travellers</h3>
       <p className="tk-dim">Every plan and packing list uses this. It stays in this browser. Don't add ID or passport numbers.</p>
       <div className="grid-2">
-        {field('homeCity', 'Home city (default start)', 'Chennai')}
+        {field('homeCity', 'Home city (default start)', 'e.g. Pune')}
         {field('vehicle', 'Your car', 'e.g. Hyundai Creta diesel, 5 seats')}
         <div className="field">
           <label htmlFor="p-fuelType">Fuel</label>
@@ -845,16 +869,71 @@ export function TravellersCard({ profile, onSave }: { profile: Profile; onSave: 
             {['Relaxed', 'Balanced', 'Packed'].map((o) => <option key={o}>{o}</option>)}
           </select>
         </div>
-        {field('food', 'Family food preference', 'e.g. vegetarian')}
+        {field('food', 'Cuisines you enjoy', 'e.g. Punjabi, Bengali, street food')}
         {field('budgetPerDay', 'Budget per person per day', 'e.g. ₹3,000')}
         {field('alwaysCarry', 'Always carry', 'Regular medicines, puja items…')}
+      </div>
+      <h4 className="tk-sub">About the car</h4>
+      <p className="tk-dim tk-small">Some road rules depend on the car: Himachal's entry tax and Uttarakhand's green cess for out-of-state cars, Rohtang's 10-year age limit, Delhi's pollution rules, and Sikkim's permit routes.</p>
+      <div className="grid-2">
+        <div className="field">
+          <label htmlFor="p-regState">Registered in</label>
+          <select id="p-regState" value={p.regState || ''} onChange={(e) => set('regState', e.target.value)}>
+            <option value="">Not set</option>
+            {Object.entries(STATE_NAMES).sort((a, b) => a[1].localeCompare(b[1])).map(([code, name]) => <option key={code} value={code}>{name} ({code})</option>)}
+          </select>
+        </div>
+        <div className="field">
+          <label htmlFor="p-regYear">Year registered</label>
+          <input id="p-regYear" inputMode="numeric" maxLength={4} placeholder="e.g. 2019" value={p.regYear || ''} onChange={(e) => set('regYear', e.target.value.replace(/\D/g, ''))} />
+        </div>
+        <div className="field">
+          <label htmlFor="p-bsNorm">Emission norm</label>
+          <select id="p-bsNorm" value={p.bsNorm || ''} onChange={(e) => set('bsNorm', e.target.value)}>
+            <option value="">Don't know</option>
+            <option value="BS-VI">BS-VI (most cars from April 2020)</option>
+            <option value="BS-IV">BS-IV (about 2017–2020)</option>
+            <option value="BS-III">BS-III (older)</option>
+          </select>
+        </div>
+        <div className="field">
+          <label htmlFor="p-clearance">Ground clearance</label>
+          <select id="p-clearance" value={p.clearance || ''} onChange={(e) => set('clearance', e.target.value)}>
+            <option value="">Not set</option>
+            <option value="low">Low (hatchback, sedan)</option>
+            <option value="normal">Normal (compact SUV)</option>
+            <option value="high">High (SUV, 4x4)</option>
+          </select>
+        </div>
+        <div className="field">
+          <label htmlFor="p-carType">Usually travel in</label>
+          <select id="p-carType" value={p.carType || ''} onChange={(e) => set('carType', e.target.value)}>
+            <option value="">Not set</option>
+            <option>Own car</option>
+            <option>Rented self-drive</option>
+            <option>Hired cab with driver</option>
+          </select>
+        </div>
+        <div className="field">
+          <label htmlFor="p-fastag">FASTag</label>
+          <select id="p-fastag" value={p.fastag || ''} onChange={(e) => set('fastag', e.target.value)}>
+            <option value="">Not set</option>
+            <option>FASTag</option>
+            <option>FASTag with Annual Pass</option>
+            <option>No FASTag</option>
+          </select>
+        </div>
       </div>
       <h4 className="tk-sub">Who usually travels</h4>
       {p.travellers.map((t, i) => (
         <div key={i} className="tk-trav">
           <input aria-label="Name" placeholder="Name" value={t.name} onChange={(e) => setT(i, 'name', e.target.value)} />
           <input aria-label="Age" placeholder="Age" value={t.age} onChange={(e) => setT(i, 'age', e.target.value)} />
-          <input aria-label="Food" placeholder="Veg, Jain…" value={t.food} onChange={(e) => setT(i, 'food', e.target.value)} />
+          <select aria-label={`What ${t.name || 'this traveller'} eats`} value={DIETS.includes(t.food) ? t.food : t.food ? '__other' : ''} onChange={(e) => setT(i, 'food', e.target.value === '__other' ? t.food || 'Other' : e.target.value)}>
+            <option value="">Diet: not set</option>
+            {DIETS.map((d) => <option key={d}>{d}</option>)}
+            {t.food && !DIETS.includes(t.food) && <option value="__other">{t.food}</option>}
+          </select>
           <input aria-label="Health or mobility" placeholder="Knee pain, motion sickness…" value={t.notes} onChange={(e) => setT(i, 'notes', e.target.value)} />
           <button className="btn-icon-bg" aria-label="Remove traveller" onClick={() => { setP({ ...p, travellers: p.travellers.filter((_, j) => j !== i) }); setSaved(false); }}>
             <span className="material-symbols-outlined" aria-hidden="true">close</span>
@@ -913,7 +992,7 @@ const LEAVE = [
   { name: 'Power', items: ['TV, Wi-Fi router and chargers unplugged', 'AC and fans off', 'Iron and other heating appliances unplugged', 'Inverter left on (for the fridge) or switched off'] },
   { name: 'Security', items: ['Windows and balcony doors locked', 'Valuables and cash locked away', 'Spare key with a trusted neighbour or family member', 'Outside light on a timer, or a neighbour checking in'] },
   { name: 'Deliveries & people', items: ['Newspaper and milk paused', 'Help / cook / driver informed of dates', 'Plants watered, or someone asked', 'Pet care arranged'] },
-  { name: 'Car (road trips)', items: ['Fuel tank full (or EV charged to 100%)', 'Tyre pressure checked, spare tyre and jack in the boot', 'FASTag balance topped up', 'RC, insurance, PUC and licence in the car (or on DigiLocker)', 'Phone mount and car charger', 'Water bottles, tissues and a waste bag in the car', 'Torch and basic tool kit'] },
+  { name: 'Car (road trips)', items: ['Fuel tank full (or EV charged to 100%)', 'Tyre pressure checked, spare tyre and jack in the boot', 'FASTag active and topped up (toll plazas take no cash)', 'RC, insurance, PUC and licence in the car (or on DigiLocker)', 'Permits and registrations printed or saved (Rohtang, Inner Line Permits, Char Dham)', 'Phone mount and car charger', 'Water bottles, tissues and a waste bag in the car', 'Torch and basic tool kit'] },
   { name: 'Phone & money', items: ['Tickets and hotel bookings saved offline', 'Offline maps downloaded', 'Power bank charged', 'Card enabled for international use (if going abroad)', 'Some cash in small notes'] },
   { name: 'Getting out', items: ['Cab booked with 30-minute buffer (if not driving)', 'IDs for every traveller in hand', 'Medicines packed', 'Final walk-through done'] },
 ];

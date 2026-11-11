@@ -170,6 +170,15 @@ export function WalletCard({ trip, profile, onChange, by }: { trip: SavedTrip; p
         </div>
       </div>
 
+      <h4 className="tk-sub">Tolls</h4>
+      {profile.fastag === 'No FASTag' ? (
+        <p className="tk-small tk-over">National highway toll plazas have taken no cash since 10 Apr 2026: without a FASTag you pay 1.25 times the toll by UPI, or can be turned back. Get a FASTag (from your bank or the Rajmargyatra app) before you leave.</p>
+      ) : profile.fastag === 'FASTag with Annual Pass' ? (
+        <p className="tk-small">Your FASTag Annual Pass (₹3,075 for 2026-27; one year or 200 crossings) covers national highway and expressway plazas only. State expressways such as Mumbai–Pune and Samruddhi, and state toll roads, are charged to your FASTag balance, so keep it topped up.</p>
+      ) : (
+        <p className="tk-small">Toll plazas on national highways are FASTag-only since 10 Apr 2026 (no cash; 1.25 times the toll by UPI without one). Keep it topped up.{!profile.fastag && <span className="tk-dim"> Tell us about your FASTag in Toolkit → Travellers.</span>}</p>
+      )}
+
       <h4 className="tk-sub">Spending</h4>
       <div className="tk-wallet-total">
         <span><strong className="tk-mono">{formatINR(spent)}</strong> spent{plannedTotal ? <> of <span className="tk-mono">{formatINR(plannedTotal)}</span> planned</> : ''}</span>

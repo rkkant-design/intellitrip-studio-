@@ -7,7 +7,7 @@
  * IntelliTrip's day cards (themes, hero moments, live alerts, a stay pick).
  */
 
-import { ROAD_RULES_FOR_PROMPT } from '../../roadrules';
+import { rulesForPrompt } from '../../roadrules';
 
 export const SYSTEM_PROMPT = `You are IntelliTrip, a careful travel planner for a family based in India.
 Rules:
@@ -22,8 +22,7 @@ Rules:
 - Restaurants and food stops must be specific, currently operating places you found in your search, with their real branch location. Never list a chain branch you have not confirmed in that town, and never use a bus stand, a generic "local bakery" or "any fuel bunk" as a food stop. If unsure whether one is still open, say "check it's open".
 - Every stop, food stop and hidden gem must be one specific, named place someone can type into Google Maps. Never write a placeholder such as "quiet roadside viewpoint near X", "highway stalls", "a local bakery" or "fuel top-up (optional)"; put general fuel advice in tips instead. On long highway stretches, look for real lesser-known places within a short detour of the route; if you find none, list fewer stops rather than inventing one.
 - Do not put links or citations inside the JSON text fields; list them only under "sources".
-- Known road rules in South India. Plan every drive to respect them (time forest stretches for daylight, add e-passes to bookBy, use the stated detours):
-${ROAD_RULES_FOR_PROMPT}
+- The trip details list the known road rules for this route (forest night closures, permits, seasonal pass closures, rain-time ghat bans). Plan every drive to respect them: time forest and pass stretches for daylight and the right season, add permits, registrations and e-passes to bookBy, and use the stated detours. Where a rule says to confirm, tell the family to check it.
 - Reply with ONE JSON object only, no prose before or after it.`;
 
 export const PLAN_SCHEMA = `Return JSON with exactly these keys:
@@ -80,6 +79,12 @@ export interface Profile {
   food?: string;
   alwaysCarry?: string;
   budgetPerDay?: string;
+  regState?: string;
+  regYear?: string;
+  bsNorm?: string;
+  clearance?: string;
+  carType?: string;
+  fastag?: string;
 }
 
 export interface TripRequest {
@@ -108,7 +113,7 @@ export const endDate = (start: string, nights: number) => {
 };
 
 /** Describes the trip and the family for the model. Every field is user input, so it is length-limited. */
-export function tripContext(req: TripRequest): string {
+export function tripContext(req: TripRequest, extraText = ''): string {
   const p = req.profile || {};
   const nights = Math.max(1, Math.min(30, Number(req.duration) || 1));
   const start = clip(req.startDate, 10);
@@ -128,9 +133,11 @@ export function tripContext(req: TripRequest): string {
     `How they're travelling: ${clip(req.mode, 60) || 'Road trip in our own car'}`,
     `Most driving they want in a day: ${clip(req.maxDrive, 20) || '5 hours'}`,
     `Leaving home on day 1 at: ${clip(req.leaveAt, 10) ? `${clip(req.leaveAt, 10)} (fixed: plan day 1 from this time and set roadTrip.departAt to it)` : 'not fixed (suggest the best time in roadTrip.departAt)'}`,
-    `Vehicle: ${clip(p.vehicle, 80) || 'car (type not given)'}`,
+    `Vehicle: ${clip(p.vehicle, 80) || 'car (type not given)'}${p.regState ? `, registered in ${clip(p.regState, 4)}` : ''}${p.regYear ? ` in ${clip(p.regYear, 4)}` : ''}${p.bsNorm ? `, ${clip(p.bsNorm, 8)}` : ''}${p.clearance ? `, ${clip(p.clearance, 8)} ground clearance` : ''}${p.carType ? `; ${clip(p.carType, 30)}` : ''}${p.fastag ? `; ${clip(p.fastag, 30)}` : ''}`,
     `Always carry: ${clip(p.alwaysCarry, 200) || 'nothing specific'}`,
     `What they want from the trip: ${clip(req.idealTripDescription, 800) || 'a memorable, well-paced trip'}`,
+    'Known road rules on or near this route:',
+    rulesForPrompt([req.fromLocation, req.destination, req.idealTripDescription, extraText].map((x) => String(x || '')).join(' ')),
   ].join('\n');
 }
 
@@ -183,7 +190,7 @@ export function reviseInput(req: TripRequest, plan: unknown, scope: ReviseScope,
   const where = scope === 'all' ? 'the whole trip' : `day ${scope} only`;
   const changed = detailChanges(before, req);
   return [
-    tripContext(req),
+    tripContext(req, JSON.stringify((plan as any)?.roadTrip || '')),
     '',
     changed.length
       ? `THE TRIP DETAILS HAVE CHANGED. The plan below was made for the old details; the details above are the new ones:\n${changed.join('\n')}\nRebuild everything that depends on them.`
@@ -243,7 +250,7 @@ export function noticesInput(req: TripRequest, plan: any): string {
     ...(drives.length ? drives : ['(no drives listed; check the destination and the roads into it)']),
     '',
     'These known rules are already shown to the family; report them only if their current status or timings differ:',
-    ROAD_RULES_FOR_PROMPT,
+    rulesForPrompt(`${req.fromLocation} ${req.destination} ${JSON.stringify(plan?.roadTrip || '')}`),
     '',
     NOTICES_RULES,
     '',

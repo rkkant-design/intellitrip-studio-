@@ -9,8 +9,8 @@
  *    be somewhere to eat, a stay somewhere to sleep) and it is near the expected
  *    town. Vague entries such as "Check-in and unwind" are skipped, not guessed;
  *  - every driving leg gets a real road distance and driving time from Mapbox
- *    (the public token the traffic map already uses), or the public OSRM router
- *    when no token is configured.
+ *    (the public token the traffic map already uses); without a token, drives
+ *    keep the plan's own distances.
  * These are free services with fair-use limits, so lookups are few, spaced out
  * and saved with the trip so they run once.
  */
@@ -348,14 +348,12 @@ async function routeThrough(points: Point[]): Promise<LegCheck | null> {
     hits: ruleHits(Array.isArray(r.geometry?.coordinates) ? r.geometry.coordinates : []),
     path: thinPath(Array.isArray(r.geometry?.coordinates) ? r.geometry.coordinates : []),
   });
-  if (MAPBOX_TOKEN) {
-    const d = await getJson(`https://api.mapbox.com/directions/v5/mapbox/driving/${coords}?overview=full&geometries=geojson&access_token=${MAPBOX_TOKEN}`);
-    const r = d?.routes?.[0];
-    if (r) return shape(r, 'Mapbox');
-  }
-  const o = await getJson(`https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson`);
-  const r = o?.routes?.[0];
-  return r ? shape(r, 'OpenStreetMap') : null;
+  // Mapbox only: the public OSRM demo server allows only non-commercial use, so it is no longer a fallback.
+  // Without Mapbox the drive simply stays unmeasured, and the plan's own distances are used.
+  if (!MAPBOX_TOKEN) return null;
+  const d = await getJson(`https://api.mapbox.com/directions/v5/mapbox/driving/${coords}?overview=full&geometries=geojson&access_token=${MAPBOX_TOKEN}`);
+  const r = d?.routes?.[0];
+  return r ? shape(r, 'Mapbox') : null;
 }
 
 const arr = <T,>(x: T[] | undefined | null): T[] => (Array.isArray(x) ? x : []);
@@ -385,6 +383,14 @@ export function placesWithKind(plan: Plan): { p: Place; kind: Kind }[] {
 
 export const placesIn = (plan: Plan): Place[] => placesWithKind(plan).map(({ p }) => p);
 
+/** How far the plan says a drive is: its distance, or failing that its driving time at about 75 km an hour. */
+function planKm(leg?: { distanceKm?: number; driveTime?: string }): number {
+  if (!leg) return 0;
+  if (Number(leg.distanceKm) > 0) return Number(leg.distanceKm);
+  const h = /(\d+(?:\.\d+)?)\s*(?:h|hr|hour)/i.exec(String(leg.driveTime || ''));
+  return h ? Number(h[1]) * 75 : 0;
+}
+
 /**
  * Runs the whole check. Drives come first (town to town), so road lines, road-rule timing and the fuel
  * estimate are ready in seconds; `onPartial` gets that early result and updates as places are found.
@@ -412,9 +418,11 @@ export async function checkPlan(
   const fromPt = await findTown(from);
   // The plan's own road distance to the destination rules out namesakes far away: a place more
   // than that far in a straight line can't be the one meant.
+  // With no distance given, the drive time stands in (at most ~75 km an hour): India has many towns of
+  // the same name (there is a Manali in Chennai), so an unbounded lookup can pick one 2,000 km away.
   const destWords = distinctiveWords(townOnly(destination));
-  const toDest = legs.find((l) => l.distanceKm && destWords.some((w) => tokens(l.to || '').some((t) => sameWord(w, t))));
-  const maxStraight = toDest ? Number(toDest.distanceKm) * 1.15 + 15 : Infinity;
+  const toDest = legs.find((l) => planKm(l) && destWords.some((w) => tokens(l.to || '').some((t) => sameWord(w, t))));
+  const maxStraight = toDest ? planKm(toDest) * 1.15 + 15 : Infinity;
   const destPt = await findTown(destination, (p) => !fromPt || km(fromPt, p) <= maxStraight);
   if (fromPt && destPt) {
     const span = km(fromPt, destPt);
@@ -429,8 +437,13 @@ export async function checkPlan(
     const leg = legs[i];
     const start = leg.from ? await findTown(leg.from) : null;
     const end = leg.to ? await findTown(leg.to) : null;
-    ends[i] = start && end ? [start, end] : null;
-    legChecks[String(i)] = start && end ? await routeThrough([start, end]) : null;
+    // A town matched far from where the plan says it is (a namesake elsewhere in India) gives a road far
+    // longer than planned: leave that drive unmeasured rather than show the wrong road.
+    const limit = planKm(leg) ? planKm(leg) * 2.5 + 40 : Infinity;
+    const plausible = start && end && km(start, end) <= limit;
+    ends[i] = plausible ? [start, end] : null;
+    const measured = plausible ? await routeThrough([start, end]) : null;
+    legChecks[String(i)] = measured && measured.km <= limit ? measured : null;
     tick();
   }
   const direct = fromPt && destPt ? await routeThrough([fromPt, destPt]) : null;

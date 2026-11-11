@@ -10,8 +10,10 @@
  */
 
 import React from 'react';
-import { type RoadRule, ROAD_RULES } from './roadrules';
-import { type Leg, type SavedTrip, addDays, arr, driveHours, fmtDate, mmss, safeUrl } from './tripkit';
+import { type RoadRule, ROAD_RULES, STATE_NAMES, mentionsRule } from './roadrules';
+export { STATE_NAMES };
+import { ruleHits } from './placecheck';
+import { type Leg, type SavedTrip, addDays, arr, driveHours, fmtDate, mmss, safeUrl, todayStr, endDateOf } from './tripkit';
 
 export type Level = 'blocker' | 'warning' | 'todo' | 'caution' | 'ok';
 
@@ -25,6 +27,8 @@ export interface Finding {
   leaveAfter?: string; // earliest departure that avoids it, when the clash is before the road reopens
   assumedStart?: boolean; // the plan didn't say when they leave
   measured: boolean; // from the real road path, not just place names
+  stale?: boolean; // the rule is past its re-check date
+  label?: string; // overrides the level's usual label
   detail: string;
 }
 
@@ -82,18 +86,55 @@ const inClosure = (min: number, from: string, to: string) => {
 const textOf = (leg: Leg) =>
   [leg.from, leg.to, leg.route, ...arr(leg.stops).flatMap((s) => [s.name, s.mapsQuery])].filter(Boolean).join(' ').toLowerCase();
 
-const mentions = (rule: RoadRule, text: string) => rule.keywords.some((k) => text.includes(k));
+/** The car, as far as the road rules need to know it. Anything missing means a rule is worded "if…". */
+export interface CarInfo {
+  regState?: string; // registration state code, e.g. "TN"
+  regYear?: number;
+  fuelType?: string; // Petrol | Diesel | CNG | Electric
+  bsNorm?: string; // BS-III | BS-IV | BS-VI
+  clearanceMm?: number;
+}
 
-/** Every road rule this trip meets, most serious first. */
-export function assess(trip: SavedTrip): Finding[] {
+
+
+const mentions = mentionsRule;
+
+/** Whether a date (YYYY-MM-DD) falls in a yearly window of "MM-DD" days, which may wrap past New Year. */
+export function inWindow(date: string, w: { from: string; to: string }): boolean {
+  const md = date.slice(5);
+  return w.from <= w.to ? md >= w.from && md <= w.to : md >= w.from || md <= w.to;
+}
+
+/** Days from a date to the nearest edge of a window, when the date is outside it (for "close to opening" warnings). */
+function daysToWindow(date: string, w: { from: string; to: string }): number {
+  const year = Number(date.slice(0, 4));
+  const d = new Date(date + 'T00:00:00').getTime();
+  let best = Infinity;
+  for (const y of [year - 1, year, year + 1]) {
+    for (const edge of [w.from, w.to]) {
+      best = Math.min(best, Math.abs(new Date(`${y}-${edge}T00:00:00`).getTime() - d) / 86_400_000);
+    }
+  }
+  return Math.round(best);
+}
+
+const md = (mmdd: string) => new Date(`2026-${mmdd}T00:00:00`).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+
+/** Every road rule this trip meets, most serious first. `car` makes car-dependent rules exact. */
+export function assess(trip: SavedTrip, car: CarInfo = {}): Finding[] {
   const rt = trip.plan.roadTrip && typeof trip.plan.roadTrip === 'object' ? trip.plan.roadTrip : null;
   const legs = arr(rt?.legs);
   const findings: Finding[] = [];
   const seen = new Set<string>();
+  const start0 = trip.form.startDate;
+  const today = todayStr();
 
   legs.forEach((leg, i) => {
     const real = trip.checks?.legs[String(i)] || null;
-    const hits = real?.hits;
+    // Rule areas crossed, worked out again from the saved road shape so newly added rules count too.
+    const hits = real?.path && real.path.length > 1 ? ruleHits(real.path) : real?.hits;
+    const dayNo = leg.day ?? i + 1;
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(start0 || '') ? addDays(start0, dayNo - 1) : '';
     for (const rule of ROAD_RULES) {
       const hit = hits?.find((h) => h.ruleId === rule.id);
       // Without a measured path, fall back to place names in the plan.
@@ -106,17 +147,71 @@ export function assess(trip: SavedTrip): Finding[] {
       const { min: start, assumed } = legStart(trip, leg, i);
       // The plan's own time includes stops, so it is the better guess at when they really get there.
       const hours = Math.max(real?.hours || 0, driveHours(leg.driveTime) || 0) || real?.hours || 0;
-      const base: Omit<Finding, 'level' | 'detail'> = { rule, day: leg.day ?? i + 1, leg, assumedStart: assumed, measured: Boolean(hit) };
+      const base: Omit<Finding, 'level' | 'detail'> = { rule, day: dayNo, leg, assumedStart: assumed, measured: Boolean(hit), stale: today > rule.reviewBy };
+
+      // --- the car ---
+      const v = rule.vehicle;
+      let carNote = '';
+      if (v?.outsideState) {
+        if (car.regState === v.outsideState) continue; // a local car: the rule doesn't apply
+        if (!car.regState) carNote = `If your car is registered outside ${STATE_NAMES[v.outsideState] || v.outsideState}: `;
+      }
+      if (v?.exemptFuels && car.fuelType && v.exemptFuels.includes(car.fuelType)) continue;
+      let carLevel: Level | null = null;
+      let carDetail = '';
+      const tripYear = Number((date || today).slice(0, 4));
+      if (v?.maxAgeYears && car.regYear && tripYear - car.regYear > v.maxAgeYears) {
+        carLevel = 'blocker';
+        carDetail = ` Your car (registered ${car.regYear}) is more than ${v.maxAgeYears} years old, so it won't get this permit.`;
+      }
+      if (v?.minClearanceMm && car.clearanceMm && car.clearanceMm < v.minClearanceMm) {
+        carLevel = 'warning';
+        carDetail = ` Your car's ground clearance (${car.clearanceMm} mm) is below the ${v.minClearanceMm} mm needed.`;
+      }
+      if (v?.oldEmissionNorms) {
+        if (car.bsNorm === 'BS-III' || (car.bsNorm === 'BS-IV' && car.fuelType === 'Diesel')) {
+          carLevel = 'warning';
+          carDetail = ` Your car is ${car.bsNorm}${car.fuelType ? ` ${car.fuelType.toLowerCase()}` : ''}, which these restrictions target.`;
+        }
+      }
+
+      // --- the season ---
+      if (rule.season && date) {
+        const inside = inWindow(date, rule.season);
+        if (rule.kind === 'seasonal-closure') {
+          if (inside) {
+            findings.push({ ...base, level: rule.certainty === 'standing' ? 'blocker' : 'warning', detail: `${rule.summary} Your drive on ${fmtDate(date)} falls in the usual closed season (${md(rule.season.from)} to ${md(rule.season.to)}).` });
+          } else if (daysToWindow(date, rule.season) <= 21) {
+            findings.push({ ...base, level: 'caution', detail: `${rule.summary} Your drive on ${fmtDate(date)} is within three weeks of the usual opening or closing date, so confirm it's open.` });
+          }
+          continue;
+        }
+        if (!inside) continue; // the rule only applies in its season
+      }
+      if (rule.kind === 'seasonal-closure') {
+        findings.push({ ...base, level: 'caution', detail: rule.summary });
+        continue;
+      }
 
       if (rule.kind === 'permit') {
         // A permit is needed to enter the area: not for a drive that starts inside it, and only once per trip.
-        const entering = hit ? hit.enter > 0 : mentions(rule, String(leg.to || '').toLowerCase());
+        const entering = hit ? hit.enter > 0 : mentions(rule, String(leg.to || ''));
         if (!entering || findings.some((f) => f.rule.id === rule.id)) continue;
-        findings.push({ ...base, level: 'todo', detail: rule.summary });
+        findings.push({ ...base, level: carLevel || 'todo', label: carLevel === 'blocker' ? 'Not allowed for your car' : carLevel ? 'Check your car' : undefined, detail: carNote + rule.summary + carDetail });
         continue;
       }
       if (rule.kind === 'no-tourists') {
         findings.push({ ...base, level: rule.certainty === 'standing' ? 'blocker' : 'warning', detail: rule.summary });
+        continue;
+      }
+      if (rule.kind === 'no-outside-cars') {
+        if (findings.some((f) => f.rule.id === rule.id)) continue;
+        findings.push({ ...base, level: carLevel || 'warning', label: 'Outside cars', detail: carNote + rule.summary + carDetail });
+        continue;
+      }
+      if (rule.kind === 'advisory') {
+        if (findings.some((f) => f.rule.id === rule.id)) continue;
+        findings.push({ ...base, level: carLevel || rule.level || 'caution', label: carLevel ? 'Check your car' : undefined, detail: carNote + rule.summary + carDetail });
         continue;
       }
       if (!rule.closed || !hours) {
@@ -162,10 +257,13 @@ export function assess(trip: SavedTrip): Finding[] {
   });
 
   // Permits for the destination itself, even when no drive was measured into it.
-  const dest = `${trip.form.destination} ${trip.plan.title || ''}`.toLowerCase();
-  for (const rule of ROAD_RULES.filter((r) => r.kind === 'permit')) {
+  const dest = `${trip.form.destination} ${trip.plan.title || ''}`;
+  for (const rule of ROAD_RULES.filter((r) => r.kind === 'permit' || r.kind === 'no-outside-cars')) {
+    if (rule.vehicle?.outsideState && car.regState === rule.vehicle.outsideState) continue;
+    // Seasonal rules count only when the trip falls in their season.
+    if (rule.season && /^\d{4}-\d{2}-\d{2}$/.test(start0 || '') && !inWindow(start0, rule.season) && !inWindow(endDateOf(trip.form), rule.season)) continue;
     if (!findings.some((f) => f.rule.id === rule.id) && mentions(rule, dest)) {
-      findings.push({ rule, level: 'todo', measured: false, detail: rule.summary });
+      findings.push({ rule, level: rule.kind === 'permit' ? 'todo' : 'warning', measured: false, stale: today > rule.reviewBy, detail: rule.summary });
     }
   }
 
@@ -174,8 +272,13 @@ export function assess(trip: SavedTrip): Finding[] {
 }
 
 export const LEVEL_LABEL: Record<Level, string> = {
-  blocker: 'Closed when you\'d be there', warning: 'Check before you go', todo: 'Needs a permit',
-  caution: 'On rain-alert days', ok: 'Fine on this plan',
+  blocker: 'Closed when you\'d be there', warning: 'Check before you go', todo: 'Permit or fee',
+  caution: 'Be aware', ok: 'Fine on this plan',
+};
+
+/** How sure the app is about a rule, in words. */
+export const GRADE_LABEL: Record<RoadRule['grade'], string> = {
+  A: 'Official source', B: 'Reported in the news, confirm', C: 'Unconfirmed: check the official site',
 };
 
 const tripDates = (trip: SavedTrip) => {
@@ -185,14 +288,16 @@ const tripDates = (trip: SavedTrip) => {
 };
 
 export function RoadRulesCard({
-  trip, busy, onCheckNotices, onFix,
+  trip, busy, onCheckNotices, onFix, car = {}, alertsSlot,
 }: {
   trip: SavedTrip;
+  car?: CarInfo;
+  alertsSlot?: React.ReactNode; // live official alerts on the route
   busy: number | null; // seconds, while the notices check runs
   onCheckNotices: () => void;
   onFix: (day: number, text: string) => void;
 }) {
-  const findings = assess(trip);
+  const findings = assess(trip, car);
   const notices = trip.notices;
   const driving = Boolean(trip.plan.roadTrip && typeof trip.plan.roadTrip === 'object' && arr(trip.plan.roadTrip.legs).length);
   if (!driving && !findings.length) return null;
@@ -202,7 +307,7 @@ export function RoadRulesCard({
     <div className="card tk-card tk-roadrules">
       <h3 className="tk-h3"><span className="material-symbols-outlined" aria-hidden="true">traffic</span>Road Rules</h3>
       {findings.length === 0 ? (
-        <p className="tk-small">None of the {ROAD_RULES.length} road rules IntelliTrip knows about (forest night closures, e-passes, rain-time ghat bans) lie on this route.</p>
+        <p className="tk-small">None of the {ROAD_RULES.length} road rules IntelliTrip knows about across India (forest night closures, permits, pass and ghat closures) lie on this route.</p>
       ) : (
         <p className="tk-small">
           {serious ? <strong className="tk-over">{serious} thing{serious === 1 ? '' : 's'} could stop this drive.</strong> : <strong className="tk-ok-text">Nothing on this plan is known to stop the drive.</strong>}
@@ -213,9 +318,14 @@ export function RoadRulesCard({
       {findings.map((f, i) => (
         <div key={`${f.rule.id}-${i}`} className={`tk-rule ${f.level}`}>
           <div className="tk-stop-head">
-            <span className={`tk-chip rule-${f.level}`}>{LEVEL_LABEL[f.level]}</span>
+            <span className={`tk-chip rule-${f.level}`}>{f.label || (f.rule.kind === 'seasonal-closure' && f.level !== 'caution' ? 'Closed in season' : LEVEL_LABEL[f.level])}</span>
             {f.day && <span className="day-num">Day {f.day}</span>}
             <strong>{f.rule.name}</strong>
+          </div>
+          <div className="tk-rule-meta">
+            <span className={`tk-grade grade-${f.rule.grade}`}>{GRADE_LABEL[f.rule.grade]}</span>
+            <span className="tk-dim">{f.rule.region}</span>
+            {f.stale && <span className="tk-warn-text">Due for a re-check: confirm before relying on it</span>}
           </div>
           <div className="tk-small">{f.detail}</div>
           {(f.level === 'blocker' || f.level === 'warning' || f.level === 'caution') && <div className="tk-small"><strong>What to do:</strong> {f.rule.whatToDo}</div>}
@@ -233,6 +343,8 @@ export function RoadRulesCard({
           )}
         </div>
       ))}
+
+      {alertsSlot}
 
       <h4 className="tk-sub">Latest road notices</h4>
       {busy !== null ? (

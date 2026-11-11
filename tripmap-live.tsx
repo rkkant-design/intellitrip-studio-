@@ -50,6 +50,8 @@ export default function TripMapLive({ trip, day = 'all', traffic = false, compac
         zoom: 6,
         attributionControl: true,
         cooperativeGestures: compact || bare,
+        // India's official boundaries (Survey of India), as Indian law requires for maps shown in India.
+        worldview: 'IN',
       });
     } catch (e) {
       console.warn('The map could not start:', e);

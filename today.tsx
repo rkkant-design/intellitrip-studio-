@@ -10,7 +10,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { placeKey, routeStops } from './placecheck';
-import { LEVEL_LABEL, assess, firstTime, fmt, legStart } from './roadcheck';
+import { type CarInfo, LEVEL_LABEL, assess, firstTime, fmt, legStart } from './roadcheck';
 import { TripMap, navigateUrl } from './tripmap';
 import { type Leg, type SavedTrip, addDays, arr, driveHours, formatINR, todayStr } from './tripkit';
 import { CATEGORIES, tripDays, withExpense } from './wallet';
@@ -109,8 +109,10 @@ export function itemsFor(trip: SavedTrip, day: number): TodayItem[] {
 const ICON: Record<TodayItem['kind'], string> = { leave: 'directions_car', stop: 'pin_drop', arrive: 'flag', activity: 'event' };
 const QUICK = CATEGORIES.filter((c) => ['Fuel', 'Tolls', 'Food', 'Tickets', 'Stay', 'Other'].includes(c));
 
-export function TodayView({ trip, onChange, by, weatherSlot, onOpenPlan }: {
+export function TodayView({ trip, car = {}, onChange, by, weatherSlot, onOpenPlan, alertsSlot }: {
   trip: SavedTrip;
+  car?: CarInfo;
+  alertsSlot?: React.ReactNode;
   onChange: (t: SavedTrip) => void;
   by?: string;
   weatherSlot?: (place: string, date: string) => React.ReactNode;
@@ -152,7 +154,7 @@ export function TodayView({ trip, onChange, by, weatherSlot, onOpenPlan }: {
   const skipped = nextNav ? 0 : open.length;
 
   const legs = legsOn(trip, day);
-  const findings = assess(trip).filter((f) => f.day === day && f.level !== 'ok');
+  const findings = assess(trip, car).filter((f) => f.day === day && f.level !== 'ok');
   const plan = arr(trip.plan.days).find((x) => x.day === day);
   const date = trip.form.startDate ? addDays(trip.form.startDate, day - 1) : '';
   // The town alone: plans write places like "Thekkady (Kumily)", which the weather lookup can't find.
@@ -200,10 +202,11 @@ export function TodayView({ trip, onChange, by, weatherSlot, onOpenPlan }: {
         ))}
       </div>
 
+      {alertsSlot}
       {findings.map((f, i) => (
         <div key={i} className={`tk-rule ${f.level} today-rule`}>
           <div className="tk-stop-head">
-            <span className={`tk-chip rule-${f.level}`}>{LEVEL_LABEL[f.level]}</span>
+            <span className={`tk-chip rule-${f.level}`}>{f.label || LEVEL_LABEL[f.level]}</span>
             <strong>{f.rule.name}</strong>
           </div>
           {f.leaveBy ? <div><strong>Leave by {f.leaveBy}</strong> to clear it before it shuts.</div>

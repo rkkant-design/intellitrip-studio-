@@ -8,13 +8,14 @@ import { createRoot } from 'react-dom/client';
 import {
   type FormState, type Profile, type SavedTrip, type Packing, type Plan,
   BookByCard, LeaveCard, PackingCard, PENDING_KEY, PlanView, STORAGE_KEY, TravellersCard,
-  claimDevice, tripDetailsProblem, todayStr, emptyForm, fromTripKit, loadProfile, mmss, normaliseSaved, saveProfile, startJob, store, waitForJob, arr, endDateOf,
+  carInfo, claimDevice, tripDetailsProblem, todayStr, emptyForm, fromTripKit, loadProfile, mmss, normaliseSaved, saveProfile, startJob, store, waitForJob, arr, endDateOf,
 } from './tripkit';
 import { type Checks, checkPlan, placesIn } from './placecheck';
 import { ShareSheet } from './share';
 import { TripMap } from './tripmap';
 import { TodayView, dayOnDate, tripToday } from './today';
 import { TogetherSection } from './together';
+import { AlertsSection, useRouteAlerts } from './alerts';
 import { InstallCard, useInstall } from './install';
 import { AccountMenu, Logo, MainTabs } from './chrome';
 import { AppCrashed, SafeArea } from './safety';
@@ -521,6 +522,9 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void; onSample: () =>
   // or drives but none yet. Checks made before road rules or the trip map lack the road paths'
   // rule areas or shapes, so those run once more too.
   const onScreen = activeTab === 'today' ? archives.find((x) => x.id === todayId) || tripToday(archives) || trip : trip;
+  // Live official alerts (IMD and state disaster authorities) on the trip's roads, near and during the trip.
+  const alertsState = useRouteAlerts(onScreen, getHeaders);
+
   useEffect(() => {
     const t = onScreen;
     if (!t || checkingRef.current) return;
@@ -697,11 +701,11 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void; onSample: () =>
                 <div className="it-form-grid">
                   <div className="field">
                     <label htmlFor="fromLocation">From</label>
-                    <input id="fromLocation" name="fromLocation" value={form.fromLocation} onChange={handleInputChange} placeholder="e.g. Madurai" autoComplete="address-level2" />
+                    <input id="fromLocation" name="fromLocation" value={form.fromLocation} onChange={handleInputChange} placeholder="e.g. Pune" autoComplete="address-level2" />
                   </div>
                   <div className="field">
                     <label htmlFor="destination">To</label>
-                    <input id="destination" name="destination" value={form.destination} onChange={handleInputChange} placeholder="e.g. Thekkady" />
+                    <input id="destination" name="destination" value={form.destination} onChange={handleInputChange} placeholder="e.g. Mahabaleshwar" />
                   </div>
                   <div className="field">
                     <label htmlFor="startDate">Start date</label>
@@ -764,7 +768,7 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void; onSample: () =>
                     </div>
                     <div className="field it-span-2">
                       <label htmlFor="food">Food</label>
-                      <input id="food" name="food" value={form.food} onChange={handleInputChange} placeholder="e.g. South Indian vegetarian" />
+                      <input id="food" name="food" value={form.food} onChange={handleInputChange} placeholder="e.g. vegetarian, Jain, try the local food" />
                     </div>
                     <div className="field it-span-2">
                       <label htmlFor="idealTripDescription">Anything else? <span className="it-optional">optional</span></label>
@@ -824,7 +828,7 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void; onSample: () =>
                   onChangeDay={pendingChange ? undefined : (d) => setChangeScope(d)}
                   sidebarSlot={<RemindersCard trip={trip} onOpen={() => setReminding(true)} />}
                   rulesSlot={
-                    <RoadRulesCard trip={trip} busy={noticesRun && noticesRun.tripId === trip.id ? noticesRun.seconds : null}
+                    <RoadRulesCard trip={trip} car={carInfo(profile)} alertsSlot={<AlertsSection state={alertsState} trip={trip} />} busy={noticesRun && noticesRun.tripId === trip.id ? noticesRun.seconds : null}
                       onCheckNotices={() => checkNotices(trip)}
                       onFix={(day, text) => { if (!pendingChange) { setChangeText(text); setChangeScope(day); } }} />
                   }
@@ -849,7 +853,7 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void; onSample: () =>
 
         {activeTab === 'today' && (
           todayTrip ? (
-            <TodayView trip={todayTrip} onChange={upsertTrip} by={firstName}
+            <TodayView trip={todayTrip} car={carInfo(profile)} alertsSlot={<AlertsSection state={alertsState} trip={todayTrip} compact />} onChange={upsertTrip} by={firstName}
               weatherSlot={(place, date) => <WeatherTracker destination={place} focusDate={date} />}
               onOpenPlan={() => openArchived(todayTrip)} />
           ) : (

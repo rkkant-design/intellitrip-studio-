@@ -56,7 +56,7 @@ export function SampleCard({ onOpen }: { onOpen: () => void }) {
           <span className="material-symbols-outlined" aria-hidden="true">traffic</span>
           <span>
             {rules.length ? <><strong>{rules[0].rule.name}.</strong> </> : <strong>No known road rule stops this drive. </strong>}
-            Checked against {ROAD_RULES.length} South Indian road rules{reviewed ? ` (reviewed ${fmtDate(reviewed)})` : ''}. Live closures are checked on your own trip, 1–2 days before you leave.
+            Checked against {ROAD_RULES.length} road rules across India{reviewed ? ` (reviewed ${fmtDate(reviewed)})` : ''}. Live closures are checked on your own trip, 1–2 days before you leave.
           </span>
         </p>
         <ol className="it-sample-day">
