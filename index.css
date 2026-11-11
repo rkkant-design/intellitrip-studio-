@@ -642,3 +642,4 @@ select:disabled { opacity: 0.7; }
 .tk-shared-chip .material-symbols-outlined { font-size: 0.85rem; }
 .tk-install { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.35rem 0.75rem; font-size: 0.85rem; }
 .tk-install .material-symbols-outlined { font-size: 1.05rem; }
+.tk-landing-install { margin: 1rem auto 0; }

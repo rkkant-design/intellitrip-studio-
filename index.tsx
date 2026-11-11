@@ -15,6 +15,7 @@ import { ShareSheet } from './share';
 import { TripMap } from './tripmap';
 import { TodayView, dayOnDate, tripToday } from './today';
 import { TogetherSection } from './together';
+import { InstallCard, useInstall } from './install';
 import { WalletCard } from './wallet';
 import { RemindersCard, RemindersSheet } from './reminders';
 import { RoadRulesCard } from './roadcheck';
@@ -275,7 +276,7 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
   // A trip happening today opens straight into Today mode.
   const [activeTab, setActiveTab] = useState<ActiveTab>(() => (tripToday(loadArchives()) ? 'today' : 'planner'));
   const [todayId, setTodayId] = useState<string | null>(() => tripToday(loadArchives())?.id ?? null);
-  const [installPrompt, setInstallPrompt] = useState<any>(null);
+  const { canInstall, install } = useInstall();
   const [profile, setProfile] = useState<Profile>(loadProfile);
   const [form, setForm] = useState<FormState>(() => emptyForm(loadProfile()));
   const [pending, setPending] = useState<PendingPlan | null>(() => store.get<PendingPlan | null>(PENDING_KEY, null));
@@ -379,15 +380,6 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
       setActiveTab('planner');
     }
   }, [archives]);
-
-  // Android/Chrome offers installing the app; keep the offer for the header button.
-  useEffect(() => {
-    const onPrompt = (e: Event) => { e.preventDefault(); setInstallPrompt(e); };
-    const onInstalled = () => { setInstallPrompt(null); showToast('IntelliTrip is on your home screen.'); };
-    window.addEventListener('beforeinstallprompt', onPrompt);
-    window.addEventListener('appinstalled', onInstalled);
-    return () => { window.removeEventListener('beforeinstallprompt', onPrompt); window.removeEventListener('appinstalled', onInstalled); };
-  }, [showToast]);
 
   // Keep the open trip in step with its saved copy: another device may have changed or deleted it.
   useEffect(() => {
@@ -654,8 +646,8 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
               {SYNC_LABEL[syncStatus]}
             </span>
           )}
-          {installPrompt && (
-            <button className="btn-secondary tk-install" onClick={async () => { installPrompt.prompt(); await installPrompt.userChoice.catch(() => null); setInstallPrompt(null); }}>
+          {canInstall && (
+            <button className="btn-secondary tk-install" onClick={async () => { if (await install()) showToast('IntelliTrip is on your home screen.'); }}>
               <span className="material-symbols-outlined" aria-hidden="true">install_mobile</span>Install app
             </button>
           )}
@@ -923,6 +915,7 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void }> = ({ user, on
         {activeTab === 'toolkit' && (
           <div className="tk-toolkit animate-fade-in">
             <TravellersCard profile={profile} onSave={(p) => { applyProfile({ ...p, updatedAt: Date.now() }); showToast('Travellers saved.'); }} />
+            <InstallCard />
             <BookByCard />
             <LeaveCard />
           </div>
@@ -956,6 +949,15 @@ const fmtTripDates = (f: FormState) => {
   return `${a} – ${b}`;
 };
 
+const LandingInstall = () => {
+  const { canInstall, install } = useInstall();
+  return canInstall ? (
+    <button className="btn-secondary tk-install tk-landing-install" onClick={() => install()}>
+      <span className="material-symbols-outlined" aria-hidden="true">install_mobile</span>Install app
+    </button>
+  ) : null;
+};
+
 const LandingPage = ({ onStart }: { onStart: () => void }) => (
   <div className="landing-screen">
     <div className="landing-hero animate-fade-in">
@@ -963,6 +965,7 @@ const LandingPage = ({ onStart }: { onStart: () => void }) => (
       <h1>IntelliTrip</h1>
       <p className="hero-subtitle">High-fidelity AI Travel Architecture</p>
       <button className="btn-primary mega-btn" onClick={onStart}>Initialize Architect</button>
+      <LandingInstall />
     </div>
 
     <section className="features-grid container">
