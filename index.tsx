@@ -10,7 +10,7 @@ import {
   BookByCard, LeaveCard, PackingCard, PENDING_KEY, PlanView, STORAGE_KEY, TravellersCard,
   carInfo, claimDevice, tripDetailsProblem, todayStr, emptyForm, fromTripKit, loadProfile, mmss, normaliseSaved, saveProfile, startJob, store, waitForJob, arr, endDateOf,
 } from './tripkit';
-import { type Checks, checkPlan, placesIn } from './placecheck';
+import { type Checks, type PlaceSearch, checkPlan, placesIn } from './placecheck';
 import { ShareSheet } from './share';
 import { TripMap } from './tripmap';
 import { TodayView, dayOnDate, tripToday } from './today';
@@ -496,6 +496,22 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void; onSample: () =>
     updateTrip(t.id, (cur) => (JSON.stringify(cur.plan) === measured ? { ...cur, checks } : cur));
   }, [updateTrip]);
 
+  // The backup place search (Ola Maps, through our server so the key stays private), for places
+  // OpenStreetMap doesn't know or can't answer for. Null tells the map check it didn't answer.
+  const olaSearch = useCallback<PlaceSearch>(async (q, near) => {
+    try {
+      const res = await fetch('/api/places', {
+        method: 'POST', headers: await getHeaders(), signal: AbortSignal.timeout(10_000),
+        body: JSON.stringify({ q, lat: near?.lat, lon: near?.lon }),
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      return Array.isArray(data.hits) ? data.hits : null;
+    } catch {
+      return null;
+    }
+  }, [getHeaders]);
+
   // Checks the trip's places and drives against real map data, once at a time.
   const checkFailedAt = useRef(new Map<string, number>());
   const runChecks = useCallback(async (t: SavedTrip) => {
@@ -506,7 +522,8 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void; onSample: () =>
       const checks = await checkPlan(t.plan, t.form.fromLocation, t.form.destination,
         (done, total) => setChecking({ tripId: t.id, done, total }),
         // Drives are measured first: show them (map lines, road rules, fuel) while places are looked up.
-        (partial) => saveChecks(t, partial));
+        (partial) => saveChecks(t, partial),
+        olaSearch);
       saveChecks(t, checks);
     } catch (err) {
       checkFailedAt.current.set(t.id, Date.now());
@@ -516,7 +533,7 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void; onSample: () =>
       checkingRef.current = null;
       setChecking(null);
     }
-  }, [saveChecks, showToast]);
+  }, [saveChecks, showToast, olaSearch]);
 
   // The trip on screen (open in the planner, or in Today mode) gets a map check when it has places
   // or drives but none yet. Checks made before road rules or the trip map lack the road paths'

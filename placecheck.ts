@@ -8,6 +8,8 @@
  *    its distinctive name matches, it is the right kind of place (a food stop must
  *    be somewhere to eat, a stay somewhere to sleep) and it is near the expected
  *    town. Vague entries such as "Check-in and unwind" are skipped, not guessed;
+ *    When Photon is down or doesn't know the place, Ola Maps is asked instead
+ *    (through our server, which holds the key), with the same checks;
  *  - every driving leg gets a real road distance and driving time from Mapbox
  *    (the public token the traffic map already uses); without a token, drives
  *    keep the plan's own distances.
@@ -25,6 +27,7 @@ export interface PlaceCheck {
   lon?: number;
   matched?: string; // the name on the map
   where?: string; // the town or district on the map
+  source?: 'Ola Maps'; // set when the place was found on Ola Maps rather than OpenStreetMap (credit it)
 }
 
 export interface LegCheck {
@@ -65,7 +68,8 @@ const GENERIC = new Set([
   'ride', 'road', 'shop', 'short', 'shri', 'spot', 'sree', 'sri', 'stall', 'start', 'stay', 'stop', 'stroll',
   'sunrise', 'sunset', 'tea', 'temple', 'the', 'tiffin', 'to', 'top', 'trail', 'unwind', 'veg', 'vegetarian', 'view',
   'viewpoint', 'village', 'visit', 'walk', 'waterfall', 'arulmigu', 'tamil', 'nadu', 'kerala', 'karnataka', 'india',
-  'ticket', 'tickets', 'entrance', 'entry', 'counter', 'trailhead', 'base',
+  'ticket', 'tickets', 'entrance', 'entry', 'counter', 'trailhead', 'base', 'arrive', 'arrival', 'halt', 'pause',
+  'with', 'tour', 'boat', 'stretch', 'leg', 'checkout',
 ]);
 
 const tokens = (s: string) =>
@@ -132,6 +136,39 @@ const km = (a: { lat: number; lon: number }, b: { lat: number; lon: number }) =>
   return 12742 * Math.asin(Math.sqrt(h));
 };
 
+// Ola Maps place types: what each kind of stop may be. Ola tags roads with no type (and sometimes as a
+// sight: "Suruli Falls Road"), so a sight needs a sight's type, and road names are never a stop.
+const OLA_FOOD = new Set(['restaurant', 'cafe', 'food', 'bakery', 'meal_takeaway', 'meal_delivery']);
+const OLA_STAY = new Set(['lodging', 'hotel', 'resort', 'guest_house', 'campground', 'rv_park']);
+const OLA_SIGHT = new Set([
+  'tourist_attraction', 'natural_feature', 'park', 'place_of_worship', 'hindu_temple', 'church', 'mosque', 'gurudwara',
+  'museum', 'zoo', 'amusement_park', 'aquarium', 'art_gallery', 'campground', 'historical_landmark', 'monument', 'beach',
+]);
+const ROAD_NAME = /\b(rd|road|street|st|highway|hwy|bypass|lane|marg|salai|nagar)\.?\s*$/i;
+
+const olaKindFits = (kind: Kind, types: string[]) => {
+  if (kind === 'food') return types.some((t) => OLA_FOOD.has(t));
+  if (kind === 'stay') return types.some((t) => OLA_STAY.has(t));
+  return types.some((t) => OLA_SIGHT.has(t)) && !types.some((t) => OLA_FOOD.has(t) || OLA_STAY.has(t));
+};
+
+/** Stricter than namesMatch, for Ola's looser search: (nearly) every distinctive word must be there, and no road names. */
+const olaNameFits = (wanted: string[], placeName: string, candidate: string) => {
+  if (!namesMatch(wanted, candidate)) return false;
+  const c = tokens(candidate);
+  if (wanted.filter((w) => c.some((y) => sameWord(w, y))).length / wanted.length < 0.75) return false;
+  return !ROAD_NAME.test(candidate.split(/[|(]/)[0].trim()) || ROAD_NAME.test(placeName);
+};
+
+/** "Suruli Falls, Suruli Falls Road, Cumbum, Tamil Nadu 625516, India" -> "Cumbum, Tamil Nadu". */
+const olaWhere = (address: string) =>
+  address.split(',').map((x) => x.replace(/\d{6}/, '').trim()).filter((x) => x && !/^india$/i.test(x)).slice(1).slice(-2).join(', ');
+
+/** One answer from the backup place search. */
+export interface PlaceHit { name: string; address: string; lat: number; lon: number; types: string[] }
+/** Searches places near a point; null when the service didn't answer. */
+export type PlaceSearch = (query: string, near: { lat: number; lon: number } | null) => Promise<PlaceHit[] | null>;
+
 // --- lookups ---
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -142,6 +179,9 @@ const stats = { answered: 0 };
 // making every remaining lookup wait out its timeouts.
 const down = new Set<string>();
 const PHOTON = 'photon.komoot.io';
+const OLA = 'ola';
+// The backup place search for this run (Ola Maps through /api/places), when the app provides one.
+let backup: PlaceSearch | null = null;
 
 /** JSON from a free map service, or null when it didn't answer. Backs off when told to slow down. */
 async function getJson(url: string) {
@@ -230,7 +270,9 @@ export async function findTown(name: string, fits: (p: Point) => boolean = inCor
   return point;
 }
 
-/** Looks one place up on OpenStreetMap. */
+const JOURNEY_STEP = /^(drive|arrive|depart|head|return|leave|reach|transfer|travel|set off|start)\b/i;
+
+/** Looks one place up on OpenStreetMap, then Ola Maps. */
 async function findPlace(p: Place, kind: Kind, region: Point | null, ignore: string[]): Promise<PlaceCheck> {
   const name = (p.name || '').trim();
   const parts = (p.mapsQuery || '').split(',').map((s) => s.trim()).filter(Boolean);
@@ -238,9 +280,8 @@ async function findPlace(p: Place, kind: Kind, region: Point | null, ignore: str
   const wanted = distinctiveWords(name, [...parts.slice(1), ...ignore]);
   // Nothing that identifies a particular place ("Check-in and unwind", "Veg lunch at Kumily"): don't guess.
   if (!wanted.length) return { status: 'skipped' };
-  // OpenStreetMap's place search stopped answering earlier in this run: don't wait on it again.
-  if (down.has(PHOTON)) return { status: 'unchecked' };
-
+  // A step of the journey, not a place ("Drive Madurai → Thekkady with Theni coffee halt", "Head back to Kochi").
+  if (JOURNEY_STEP.test(name)) return { status: 'skipped' };
   const townPoint = town ? await findTown(town) : null;
   const anchor = townPoint || region;
   // A single short word ("Arya") is a weak name, so it has to be right next to the town.
@@ -254,7 +295,8 @@ async function findPlace(p: Place, kind: Kind, region: Point | null, ignore: str
     .filter((q, i, all): q is string => Boolean(q) && all.indexOf(q) === i);
 
   let answered = 0;
-  for (const q of queries) {
+  // OpenStreetMap's place search is skipped once it has stopped answering in this run.
+  for (const q of down.has(PHOTON) ? [] : queries) {
     const bias = anchor ? `&lat=${anchor.lat}&lon=${anchor.lon}` : '';
     const data = await getJson(`https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=8${bias}`);
     if (down.has(PHOTON)) break;
@@ -276,6 +318,26 @@ async function findPlace(p: Place, kind: Kind, region: Point | null, ignore: str
         status: 'found', ...point, matched: cand,
         where: [props.city || props.town || props.village || props.county, props.state].filter(Boolean).join(', '),
       };
+    }
+  }
+
+  // OpenStreetMap is down or doesn't know it: ask Ola Maps, with the same name, kind and distance checks.
+  if (backup && !down.has(OLA)) {
+    const olaQueries = [p.mapsQuery, name.replace(/\([^)]*\)/g, ' ').trim()].filter((q, i, all): q is string => Boolean(q) && all.indexOf(q) === i);
+    for (const q of olaQueries) {
+      const hits = await backup(q, anchor).catch(() => null);
+      if (!hits) { down.add(OLA); break; }
+      answered++;
+      stats.answered++;
+      for (const h of hits) {
+        if (!h.name || !olaNameFits(wanted, name, h.name)) continue;
+        if (!olaKindFits(kind, h.types || [])) continue;
+        const point = { lat: h.lat, lon: h.lon };
+        if (anchor && km(anchor, point) > maxKm) continue;
+        if (!townPoint && !nearRoute(point)) continue;
+        if (townWords.length && !townWords.some((w) => tokens(h.address || '').some((a) => sameWord(w, a)))) continue;
+        return { status: 'found', ...point, matched: h.name, where: olaWhere(h.address || ''), source: 'Ola Maps' };
+      }
     }
   }
   return { status: answered ? 'notfound' : 'unchecked' };
@@ -401,7 +463,8 @@ export async function checkPlan(
   from: string,
   destination: string,
   onProgress?: (done: number, total: number) => void,
-  onPartial?: (checks: Checks) => void
+  onPartial?: (checks: Checks) => void,
+  placeSearch?: PlaceSearch
 ): Promise<Checks> {
   const places = placesWithKind(plan);
   const legs = arr(plan.roadTrip && typeof plan.roadTrip === 'object' ? plan.roadTrip.legs : []);
@@ -412,6 +475,7 @@ export async function checkPlan(
 
   stats.answered = 0;
   down.clear();
+  backup = placeSearch || null;
   townCache.clear();
   inCorridor = () => true;
   nearRoute = () => true;

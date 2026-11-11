@@ -171,6 +171,11 @@ export default function TripMapLive({ trip, day = 'all', traffic = false, compac
             ))}
             {roadKm > 0 && <span className="tk-mono">{roadKm.toLocaleString('en-IN')} km of road</span>}
           </div>
+          {pins.some((p) => p.ola) && (
+            <p className="tk-small tk-dim tm-credit">
+              Some pins from <a className="tk-place" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">Ola Maps</a>
+            </p>
+          )}
         </>
       )}
     </div>

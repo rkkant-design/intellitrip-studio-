@@ -20,7 +20,7 @@ export const DAY_COLORS = ['#0F766E', '#B45309', '#2453FF', '#BE185D', '#7C3AED'
 export const dayColor = (day: number) => DAY_COLORS[(Math.max(1, day) - 1) % DAY_COLORS.length];
 
 export type PinKind = 'stay' | 'food' | 'sight' | 'gem';
-export interface Pin { key: string; name: string; kind: PinKind; day: number | null; lat: number; lon: number; query: string }
+export interface Pin { key: string; name: string; kind: PinKind; day: number | null; lat: number; lon: number; query: string; ola?: boolean }
 export interface Road { day: number; path: [number, number][]; from?: string; to?: string; km: number }
 
 export const PIN_ICON: Record<PinKind, string> = { stay: 'hotel', food: 'restaurant', sight: 'photo_camera', gem: 'star' };
@@ -66,6 +66,7 @@ export function mapData(trip: SavedTrip): { roads: Road[]; pins: Pin[] } {
       key: k, name: p.name || check.matched || '', lat: check.lat, lon: check.lon, query: p.mapsQuery || p.name || '',
       kind: kind === 'stay' ? 'stay' : gems.has(k) ? 'gem' : kind === 'food' ? 'food' : 'sight',
       day: kind === 'stay' ? null : dayOf.get(k) ?? null,
+      ...(check.source === 'Ola Maps' ? { ola: true } : {}),
     });
   }
   return { roads, pins };

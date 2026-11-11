@@ -300,13 +300,13 @@ const PlaceName = ({ p, fallback }: { p: Place; fallback?: string }) => {
         {p.name || fallback || p.mapsQuery}
       </a>
       {check?.status === 'found' && (
-        <span className="tk-verify ok" title={`Found on OpenStreetMap: ${check.matched}${check.where ? `, ${check.where}` : ''}`}>
+        <span className="tk-verify ok" title={`Found on ${check.source || 'OpenStreetMap'}: ${check.matched}${check.where ? `, ${check.where}` : ''}`}>
           <span className="material-symbols-outlined" aria-hidden="true">verified</span>
           <span className="sr-only">Found on the map</span>
         </span>
       )}
       {check?.status === 'notfound' && (
-        <span className="tk-verify warn" title="Not found on OpenStreetMap in that town. It may still exist: check Google Maps or call before you go.">
+        <span className="tk-verify warn" title="Not found on OpenStreetMap or Ola Maps in that town. It may still exist: check Google Maps or call before you go.">
           <span className="material-symbols-outlined" aria-hidden="true">help</span>Not on map
         </span>
       )}
@@ -326,6 +326,7 @@ function MapCheckCard({ trip, progress, onRecheck }: { trip: SavedTrip; progress
   const found = places.filter((p) => c?.places[placeKey(p)]?.status === 'found').length;
   const missing = places.filter((p) => c?.places[placeKey(p)]?.status === 'notfound').length;
   const unchecked = places.filter((p) => c?.places[placeKey(p)]?.status === 'unchecked').length;
+  const ola = places.filter((p) => c?.places[placeKey(p)]?.source === 'Ola Maps').length;
   // Vague entries ("Check-in and unwind") are skipped, so they don't count either way.
   const checked = found + missing;
   const longWay = c && !c.partial ? detour(trip.plan, c, trip.form.destination) : null;
@@ -352,6 +353,7 @@ function MapCheckCard({ trip, progress, onRecheck }: { trip: SavedTrip; progress
         {roads && 'real road distances'}
         {missing > 0 && <span className="tk-dim"> · {missing} not on the map (marked below; check those in Google Maps)</span>}
         {unchecked > 0 && <span className="tk-dim"> · {unchecked} not checked yet</span>}
+        {ola > 0 && <span className="tk-dim"> · some found with <a className="tk-place" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">Ola Maps</a></span>}
       </>
     );
   }
