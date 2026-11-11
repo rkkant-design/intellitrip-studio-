@@ -3,7 +3,7 @@
 High-fidelity AI travel architecture. A React + Vite single-page app that plans road trips
 and holidays: real routes with named stops and food on the way, hidden gems, day cards with
 "Hero Moments", INR budgets, booking deadlines and packing lists. It merges the original
-IntelliTrip with the Trip Kit planner, and uses the OpenAI API (gpt-5 with web search).
+IntelliTrip with the Trip Kit planner, and uses the OpenAI API (gpt-5.6-sol with web search).
 
 The OpenAI API key is **never** exposed to the browser. All AI calls run through Netlify
 serverless functions that read the key from a server-side environment variable.
@@ -56,7 +56,7 @@ dir, and redirects).
 2. In Netlify: **Add new site → Import an existing project**, pick the repo.
 3. Under **Site settings → Environment variables**, add (scope: Functions):
    - `OPENAI_API_KEY` = your OpenAI key
-   - *(optional)* `OPENAI_MODEL` (default `gpt-5`), `REASONING_EFFORT` (default `low`),
+   - *(optional)* `OPENAI_MODEL` (default `gpt-5.6-sol`; gpt-5 stops working on 11 Dec 2026), `OPENAI_MODEL_LIGHT` for packing lists (default `gpt-5.6-terra`), `REASONING_EFFORT` (default `low`),
      `WEB_SEARCH`, `MAX_SEARCHES`
 4. Deploy. Netlify builds the frontend to `dist/` and deploys the functions under `/api/*`.
 

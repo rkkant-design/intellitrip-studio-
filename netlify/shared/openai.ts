@@ -9,7 +9,11 @@
  */
 
 const API = 'https://api.openai.com/v1';
-export const MODEL = process.env.OPENAI_MODEL || 'gpt-5';
+// gpt-5 leaves the API on 11 Dec 2026; OpenAI's named replacement is gpt-5.6-sol.
+export const MODEL = process.env.OPENAI_MODEL || 'gpt-5.6-sol';
+// Packing lists use a cheaper model. Plans, changes and road-notice checks keep MODEL: in a side-by-side
+// test the cheaper model searched less and missed an official district notice that MODEL found.
+export const LIGHT_MODEL = process.env.OPENAI_MODEL_LIGHT || 'gpt-5.6-terra';
 // How hard gpt-5 models think: low keeps a plan to a few minutes.
 const REASONING_EFFORT = process.env.REASONING_EFFORT || 'low';
 const WEB_SEARCH = (process.env.WEB_SEARCH ?? 'true').toLowerCase() !== 'false';
@@ -42,12 +46,13 @@ async function request(method: string, path: string, body?: unknown) {
 }
 
 /** Starts a background job and returns its response id. `maxSearches` caps web searches for quick lookups. */
-export async function startJob(instructions: string, input: string, opts: { maxSearches?: number; uid?: string | null } = {}): Promise<string> {
+export async function startJob(instructions: string, input: string, opts: { maxSearches?: number; uid?: string | null; model?: string } = {}): Promise<string> {
+  const model = opts.model || MODEL;
   // The job remembers who started it, so only they can read or cancel it.
-  const base: Record<string, unknown> = { model: MODEL, instructions, input, background: true, ...(opts.uid ? { metadata: { uid: opts.uid } } : {}) };
+  const base: Record<string, unknown> = { model, instructions, input, background: true, ...(opts.uid ? { metadata: { uid: opts.uid } } : {}) };
   // Optional speed limits; dropped one by one if this model or account rejects them.
   const extras: Record<string, unknown> = { max_output_tokens: MAX_OUTPUT_TOKENS };
-  if (MODEL.startsWith('gpt-5') || /^o\d/.test(MODEL)) extras.reasoning = { effort: REASONING_EFFORT };
+  if (model.startsWith('gpt-5') || /^o\d/.test(model)) extras.reasoning = { effort: REASONING_EFFORT };
   if (WEB_SEARCH) extras.max_tool_calls = Math.min(MAX_SEARCHES, opts.maxSearches ?? MAX_SEARCHES);
   const toolOptions: (unknown[] | null)[] = WEB_SEARCH
     ? [[{ type: 'web_search' }], [{ type: 'web_search_preview' }], null]

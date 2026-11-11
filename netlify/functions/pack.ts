@@ -8,7 +8,7 @@
 
 import type { Handler, HandlerEvent } from '@netlify/functions';
 import { callerOf, guard, json, parseBody } from '../shared/guard';
-import { OpenAIError, startJob } from '../shared/openai';
+import { LIGHT_MODEL, OpenAIError, startJob } from '../shared/openai';
 import { PACK_SCHEMA, SYSTEM_PROMPT, tripContext, type TripRequest } from '../shared/prompts';
 
 const handler: Handler = async (event: HandlerEvent) => {
@@ -23,7 +23,7 @@ const handler: Handler = async (event: HandlerEvent) => {
 
   try {
     const summary = String(req.planSummary || '').slice(0, 1500);
-    const jobId = await startJob(SYSTEM_PROMPT, tripContext(req) + '\nPlan summary: ' + summary + '\n\n' + PACK_SCHEMA, { uid: callerOf.get(event) });
+    const jobId = await startJob(SYSTEM_PROMPT, tripContext(req) + '\nPlan summary: ' + summary + '\n\n' + PACK_SCHEMA, { uid: callerOf.get(event), model: LIGHT_MODEL });
     return json(200, { jobId });
   } catch (err) {
     console.error('Packing list start failed:', err);
