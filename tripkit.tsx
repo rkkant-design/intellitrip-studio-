@@ -251,53 +251,62 @@ const PlaceName = ({ p, fallback }: { p: Place; fallback?: string }) => {
   );
 };
 
-/** Summary of the map check, with progress while it runs. */
+/**
+ * The map check, in one line: it runs by itself in the background, so this only says how it went.
+ * A long detour gets a full warning, because it means the route itself is wrong.
+ */
 function MapCheckCard({ trip, progress, onRecheck }: { trip: SavedTrip; progress: { done: number; total: number } | null; onRecheck: () => void }) {
   const c = trip.checks;
   const places = placesIn(trip.plan);
-  // Shown when there are places to report on or drives to measure (distances, road rules, detours).
   const hasDrives = Boolean(trip.plan.roadTrip && typeof trip.plan.roadTrip === 'object' && arr(trip.plan.roadTrip.legs).length);
-  if (!places.length && !progress && !hasDrives) return null;
+  if (!places.length && !hasDrives) return null;
   const found = places.filter((p) => c?.places[placeKey(p)]?.status === 'found').length;
   const missing = places.filter((p) => c?.places[placeKey(p)]?.status === 'notfound').length;
   const unchecked = places.filter((p) => c?.places[placeKey(p)]?.status === 'unchecked').length;
   // Vague entries ("Check-in and unwind") are skipped, so they don't count either way.
   const checked = found + missing;
-  const longWay = c ? detour(trip.plan, c, trip.form.destination) : null;
-  const legs = Object.values(c?.legs || {}).filter(Boolean).length;
+  const longWay = c && !c.partial ? detour(trip.plan, c, trip.form.destination) : null;
+  const roads = Object.values(c?.legs || {}).some(Boolean);
+
+  let icon = 'verified';
+  let tone = 'ok';
+  let text: React.ReactNode;
+  if (progress && progress.total) {
+    icon = 'travel_explore';
+    tone = 'busy';
+    text = <>{roads ? 'Real road distances ready. ' : ''}Checking places on the map… {progress.done} of {progress.total}</>;
+  } else if (!c) {
+    return null; // the check starts by itself in a moment
+  } else if (unchecked && !checked) {
+    icon = 'cloud_off';
+    tone = 'warn';
+    text = <>{roads ? 'Real road distances are in, but places' : 'Places'} couldn't be checked: the map service isn't answering right now.</>;
+  } else {
+    text = (
+      <>
+        {checked > 0 && <><strong>{found} of {checked}</strong> places found on the map</>}
+        {checked > 0 && roads && ' · '}
+        {roads && 'real road distances'}
+        {missing > 0 && <span className="tk-dim"> · {missing} not on the map (marked below; check those in Google Maps)</span>}
+        {unchecked > 0 && <span className="tk-dim"> · {unchecked} not checked yet</span>}
+      </>
+    );
+  }
   return (
-    <div className="card tk-card tk-mapcheck">
-      <h3 className="tk-h3"><span className="material-symbols-outlined" aria-hidden="true">fact_check</span>Map Check</h3>
-      {progress ? (
-        <>
-          <div className="tk-loading"><span className="spinner tk-spinner" />Checking places and road distances on the map… {progress.done} of {progress.total}</div>
-          <div className="tk-progress"><i style={{ width: `${progress.total ? (progress.done / progress.total) * 100 : 0}%` }} /></div>
-        </>
-      ) : c ? (
-        <>
-          <p>
-            <strong className="tk-ok-text">{found} of {checked}</strong> named places found on OpenStreetMap
-            {missing > 0 && <>; <strong className="tk-warn-text">{missing}</strong> marked "Not on map". Those may still exist (small places are often missing from the map), so check them in Google Maps first.</>}
-            {missing === 0 && '.'}
-          </p>
-          {unchecked > 0 && <p className="tk-small tk-warn-text">{unchecked} couldn't be checked because the map service was busy. Tap Check again in a minute.</p>}
-          {longWay && (
-            <div className="tk-notice tk-detour">
-              <strong>This route takes the long way round.</strong> The drive to {trip.form.destination} adds up to about{' '}
-              {longWay.outboundKm} km, but the direct road from {trip.form.fromLocation} is about {longWay.directKm} km.
-              If that isn't intended, tap <strong>Change</strong> and ask for the direct route.
-            </div>
-          )}
-          {legs > 0 && <p className="tk-small">Drives below show the real road distance and pure driving time from {c.routeSource || 'the map'}, without stops or traffic.</p>}
-          <button className="btn-secondary tk-link-btn" onClick={onRecheck}>Check again</button>
-        </>
-      ) : (
-        <>
-          <p className="tk-dim">Check every place and drive in this plan against real map data.</p>
-          <button className="btn-secondary tk-link-btn" onClick={onRecheck}>Check places on the map</button>
-        </>
+    <>
+      <div className={`it-mapline ${tone}`} role="status">
+        {tone === 'busy' ? <span className="spinner tk-spinner" aria-hidden="true" /> : <span className="material-symbols-outlined" aria-hidden="true">{icon}</span>}
+        <span className="tk-grow">{text}</span>
+        {tone !== 'busy' && (unchecked > 0 || missing > 0) && <button className="it-link" onClick={onRecheck}>Check again</button>}
+      </div>
+      {longWay && (
+        <div className="tk-notice tk-detour it-detour">
+          <strong>This route takes the long way round.</strong> The drive to {trip.form.destination} adds up to about{' '}
+          {longWay.outboundKm} km, but the direct road from {trip.form.fromLocation} is about {longWay.directKm} km.
+          If that isn't intended, tap <strong>Change</strong> and ask for the direct route.
+        </div>
       )}
-    </div>
+    </>
   );
 }
 
@@ -666,8 +675,8 @@ export function PlanView({
     <div className="results-grid">
       <div className="itinerary-list">
         {changeSlot}
-        {mapSlot}
         <MapCheckCard trip={trip} progress={checkProgress} onRecheck={onRecheck} />
+        {mapSlot}
         {rulesSlot}
         {(p.weather || arr(p.alerts).length > 0) && (
           <div className="card tk-card">

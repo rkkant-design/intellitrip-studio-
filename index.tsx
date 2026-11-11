@@ -473,7 +473,9 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void; onSample: () =>
     setChecking({ tripId: t.id, done: 0, total: 0 });
     try {
       const checks = await checkPlan(t.plan, t.form.fromLocation, t.form.destination,
-        (done, total) => setChecking({ tripId: t.id, done, total }));
+        (done, total) => setChecking({ tripId: t.id, done, total }),
+        // Drives are measured first: show them (map lines, road rules, fuel) while places are looked up.
+        (partial) => patchTrip(t.id, { checks: partial }));
       patchTrip(t.id, { checks });
     } catch (err) {
       console.error('Map check failed:', err);
@@ -492,7 +494,7 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void; onSample: () =>
     const t = onScreen;
     if (!t || checkingRef.current) return;
     const hasDrives = Boolean(t.plan.roadTrip && typeof t.plan.roadTrip === 'object' && arr(t.plan.roadTrip.legs).length);
-    const needsCheck = !t.checks && (placesIn(t.plan).length > 0 || hasDrives);
+    const needsCheck = (!t.checks || t.checks.partial) && (placesIn(t.plan).length > 0 || hasDrives);
     const beforeMap = Boolean(t.checks && Object.values(t.checks.legs || {}).some((l) => l && (!('hits' in l) || !l.path)));
     if ((needsCheck || beforeMap) && navigator.onLine !== false) runChecks(t);
   }, [onScreen, runChecks]);
@@ -753,7 +755,7 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void; onSample: () =>
                   <div className="title-group">
                     <h2>{trip.plan.title || trip.form.destination}</h2>
                     <p className="tk-route">
-                      {trip.form.fromLocation} → {trip.form.destination} · {fmtTripDates(trip.form)} · {trip.form.adults} adults{Number(trip.form.children) ? `, ${trip.form.children} children` : ''}
+                      {trip.form.fromLocation} → {trip.form.destination} · {fmtTripDates(trip.form)} · {trip.form.adults} {Number(trip.form.adults) === 1 ? 'adult' : 'adults'}{Number(trip.form.children) ? `, ${trip.form.children} ${Number(trip.form.children) === 1 ? 'child' : 'children'}` : ''}
                     </p>
                     <p>{trip.plan.summary}</p>
                   </div>

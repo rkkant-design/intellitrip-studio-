@@ -43,6 +43,7 @@ export interface Checks {
   legs: Record<string, LegCheck | null>;
   routeSource?: string;
   direct?: LegCheck | null; // the plain road from the start to the destination, for spotting detours
+  partial?: boolean; // drives measured, places still being looked up (an interrupted check runs again)
 }
 
 type Kind = 'food' | 'stay' | 'sight';
@@ -137,12 +138,18 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // Counts answered lookups in the current run, so an unreachable service isn't mistaken for "not on the map".
 const stats = { answered: 0 };
+// Services that stopped answering during this run: they are skipped for the rest of it instead of
+// making every remaining lookup wait out its timeouts.
+const down = new Set<string>();
+const PHOTON = 'photon.komoot.io';
 
 /** JSON from a free map service, or null when it didn't answer. Backs off when told to slow down. */
 async function getJson(url: string) {
-  for (let attempt = 0; attempt < 3; attempt++) {
+  const host = new URL(url).host;
+  if (down.has(host)) return null;
+  for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+      const res = await fetch(url, { signal: AbortSignal.timeout(12_000) });
       if (res.ok) {
         stats.answered++;
         return await res.json();
@@ -151,8 +158,9 @@ async function getJson(url: string) {
     } catch {
       /* network blip: try again */
     }
-    await sleep(1500 * 2 ** attempt);
+    if (attempt === 0) await sleep(1500);
   }
+  down.add(host);
   return null;
 }
 
@@ -230,6 +238,8 @@ async function findPlace(p: Place, kind: Kind, region: Point | null, ignore: str
   const wanted = distinctiveWords(name, [...parts.slice(1), ...ignore]);
   // Nothing that identifies a particular place ("Check-in and unwind", "Veg lunch at Kumily"): don't guess.
   if (!wanted.length) return { status: 'skipped' };
+  // OpenStreetMap's place search stopped answering earlier in this run: don't wait on it again.
+  if (down.has(PHOTON)) return { status: 'unchecked' };
 
   const townPoint = town ? await findTown(town) : null;
   const anchor = townPoint || region;
@@ -247,6 +257,7 @@ async function findPlace(p: Place, kind: Kind, region: Point | null, ignore: str
   for (const q of queries) {
     const bias = anchor ? `&lat=${anchor.lat}&lon=${anchor.lon}` : '';
     const data = await getJson(`https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=8${bias}`);
+    if (down.has(PHOTON)) break;
     await sleep(350);
     if (data) answered++;
     for (const f of data?.features || []) {
@@ -374,12 +385,17 @@ export function placesWithKind(plan: Plan): { p: Place; kind: Kind }[] {
 
 export const placesIn = (plan: Plan): Place[] => placesWithKind(plan).map(({ p }) => p);
 
-/** Runs the whole check. Reports progress as (done, total). */
+/**
+ * Runs the whole check. Drives come first (town to town), so road lines, road-rule timing and the fuel
+ * estimate are ready in seconds; `onPartial` gets that early result and updates as places are found.
+ * Then each drive is measured again through the stops that were found. Reports progress as (done, total).
+ */
 export async function checkPlan(
   plan: Plan,
   from: string,
   destination: string,
-  onProgress?: (done: number, total: number) => void
+  onProgress?: (done: number, total: number) => void,
+  onPartial?: (checks: Checks) => void
 ): Promise<Checks> {
   const places = placesWithKind(plan);
   const legs = arr(plan.roadTrip && typeof plan.roadTrip === 'object' ? plan.roadTrip.legs : []);
@@ -389,15 +405,15 @@ export async function checkPlan(
   onProgress?.(0, total);
 
   stats.answered = 0;
+  down.clear();
   townCache.clear();
   inCorridor = () => true;
   nearRoute = () => true;
   const fromPt = await findTown(from);
   // The plan's own road distance to the destination rules out namesakes far away: a place more
   // than that far in a straight line can't be the one meant.
-  const legs0 = arr(plan.roadTrip && typeof plan.roadTrip === 'object' ? plan.roadTrip.legs : []);
   const destWords = distinctiveWords(townOnly(destination));
-  const toDest = legs0.find((l) => l.distanceKm && destWords.some((w) => tokens(l.to || '').some((t) => sameWord(w, t))));
+  const toDest = legs.find((l) => l.distanceKm && destWords.some((w) => tokens(l.to || '').some((t) => sameWord(w, t))));
   const maxStraight = toDest ? Number(toDest.distanceKm) * 1.15 + 15 : Infinity;
   const destPt = await findTown(destination, (p) => !fromPt || km(fromPt, p) <= maxStraight);
   if (fromPt && destPt) {
@@ -405,51 +421,59 @@ export async function checkPlan(
     inCorridor = (p) => km(fromPt, p) + km(p, destPt) <= span * 1.5 + 80;
     nearRoute = (p) => km(fromPt, p) + km(p, destPt) <= span * 1.2 + 30;
   }
-  const region = destPt || fromPt;
-  const ignore = [townOnly(from), townOnly(destination)];
-  const results: Record<string, PlaceCheck> = {};
-  // One lookup at a time keeps us well inside Photon's fair use. When it stops answering
-  // (three places in a row), the rest are left unchecked so the drives still get measured.
-  let silent = 0;
-  for (const item of places) {
-    const found = silent >= 3 ? { status: 'unchecked' as const } : await findPlace(item.p, item.kind, region, ignore);
-    silent = found.status === 'unchecked' ? silent + 1 : 0;
-    results[placeKey(item.p)] = found;
-    tick();
-  }
 
-  if (places.length && stats.answered === 0) throw new Error('The map service did not answer.');
-
+  // 1. Drives, town to town.
+  const ends: ([Point, Point] | null)[] = [];
   const legChecks: Record<string, LegCheck | null> = {};
   for (let i = 0; i < legs.length; i++) {
     const leg = legs[i];
     const start = leg.from ? await findTown(leg.from) : null;
     const end = leg.to ? await findTown(leg.to) : null;
-    if (!start || !end) {
-      legChecks[String(i)] = null;
-      tick();
-      continue;
-    }
-    // Route through the stops that were found, skipping any that would drag the drive far off course.
-    const direct = km(start, end);
-    const via = arr(leg.stops)
-      .map((s) => results[placeKey(s)])
-      .filter((c): c is PlaceCheck => c?.status === 'found' && c.lat !== undefined)
-      .map((c) => ({ lat: c.lat!, lon: c.lon! }))
-      .filter((pt) => km(start, pt) + km(pt, end) <= direct * 1.25 + 20);
-    legChecks[String(i)] = await routeThrough([start, ...via, end]);
+    ends[i] = start && end ? [start, end] : null;
+    legChecks[String(i)] = start && end ? await routeThrough([start, end]) : null;
     tick();
   }
-
   const direct = fromPt && destPt ? await routeThrough([fromPt, destPt]) : null;
 
-  return {
+  const results: Record<string, PlaceCheck> = {};
+  const snapshot = (partial: boolean): Checks => ({
     at: new Date().toISOString(),
-    places: results,
-    legs: legChecks,
+    places: { ...results },
+    legs: { ...legChecks },
     routeSource: Object.values(legChecks).find(Boolean)?.source,
     direct,
-  };
+    ...(partial ? { partial: true } : {}),
+  });
+  if (legs.length) onPartial?.(snapshot(true));
+
+  // 2. Places, one lookup at a time to stay within Photon's fair use; pins appear as they're found.
+  const region = destPt || fromPt;
+  const ignore = [townOnly(from), townOnly(destination)];
+  for (let k = 0; k < places.length; k++) {
+    const item = places[k];
+    results[placeKey(item.p)] = await findPlace(item.p, item.kind, region, ignore);
+    tick();
+    if ((k + 1) % 6 === 0 && k + 1 < places.length) onPartial?.(snapshot(true));
+  }
+  if (stats.answered === 0 && !Object.values(legChecks).some(Boolean)) throw new Error('The map service did not answer.');
+
+  // 3. Each drive again through the stops that were found, skipping any that would drag it far off course.
+  for (let i = 0; i < legs.length; i++) {
+    const pair = ends[i];
+    if (!pair) continue;
+    const [start, end] = pair;
+    const straight = km(start, end);
+    const via = arr(legs[i].stops)
+      .map((st) => results[placeKey(st)])
+      .filter((c): c is PlaceCheck => c?.status === 'found' && c.lat !== undefined)
+      .map((c) => ({ lat: c.lat!, lon: c.lon! }))
+      .filter((pt) => km(start, pt) + km(pt, end) <= straight * 1.25 + 20);
+    if (!via.length) continue;
+    const through = await routeThrough([start, ...via, end]);
+    if (through) legChecks[String(i)] = through;
+  }
+
+  return snapshot(false);
 }
 
 /**
