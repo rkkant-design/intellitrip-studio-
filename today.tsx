@@ -12,7 +12,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { placeKey, routeStops } from './placecheck';
 import { LEVEL_LABEL, assess, firstTime, fmt, legStart } from './roadcheck';
 import { TripMap, navigateUrl } from './tripmap';
-import { type Leg, type SavedTrip, addDays, arr, formatINR, todayStr } from './tripkit';
+import { type Leg, type SavedTrip, addDays, arr, driveHours, formatINR, todayStr } from './tripkit';
 import { CATEGORIES, tripDays, withExpense } from './wallet';
 
 export interface TodayItem {
@@ -45,51 +45,65 @@ const legsOn = (trip: SavedTrip, day: number): { leg: Leg; index: number }[] => 
   return arr(rt?.legs).map((leg, index) => ({ leg, index })).filter(({ leg, index }) => (leg.day ?? index + 1) === day);
 };
 
-/** Today's drive and plan in order: timed things by time, untimed ones after what comes before them. */
+const words = (x?: string) => (x || '').toLowerCase().normalize('NFKD').replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+/** Two names for the same thing ("Vaigai Dam Park" / "Vaigai Dam"), so a stop isn't listed twice. */
+const sameThing = (x: string, y: string) => Boolean(x && y) && (x === y || (Math.min(x.length, y.length) >= 6 && (x.includes(y) || y.includes(x))));
+
+/**
+ * Today's drive and plan in order. Stops without a time are spread across the drive (not bunched at
+ * the start); untimed activities come after the arrival; activities that repeat the drive, a stop or
+ * the arrival are left out.
+ */
 export function itemsFor(trip: SavedTrip, day: number): TodayItem[] {
   const checks = trip.checks;
   const at = (q?: string, name?: string) => {
     const c = checks?.places[placeKey({ name, mapsQuery: q })];
     return c?.status === 'found' ? { lat: c.lat, lon: c.lon } : {};
   };
-  const lists: TodayItem[][] = [];
+  const items: TodayItem[] = [];
+  let afterDrive = -1; // where untimed activities go: after the last arrival
 
   for (const { leg, index } of legsOn(trip, day)) {
     const { min } = legStart(trip, leg, index);
-    const list: TodayItem[] = [];
-    list.push({ key: `leg${index}-leave`, name: `Leave ${leg.from || 'for the drive'}`, kind: 'leave', time: min, sort: min, note: [leg.route, leg.driveTime].filter(Boolean).join(' · ') });
-    let last = min;
-    for (const s of routeStops(leg.stops, checks)) {
-      const t = firstTime(s.at);
-      last = t !== null && t >= last ? t : last + 1;
-      list.push({ key: `stop-${placeKey(s)}`, name: s.name || '', kind: 'stop', time: t, sort: last, note: [s.type, s.note].filter(Boolean).join(' · '), query: s.mapsQuery || s.name, ...at(s.mapsQuery, s.name) });
-    }
-    if (leg.to) {
-      last += 1;
-      const real = checks?.legs[String(index)];
-      list.push({ key: `leg${index}-arrive`, name: `Reach ${leg.to}`, kind: 'arrive', time: null, sort: real ? Math.max(last, min + real.hours * 60) : last, query: leg.to });
-    }
-    lists.push(list);
+    const real = checks?.legs[String(index)];
+    const hours = Math.max(real?.hours || 0, driveHours(leg.driveTime) || 0) || 2;
+    const end = min + hours * 60;
+    // Half a minute after the start time, so a breakfast at that same time comes before leaving.
+    items.push({ key: `leg${index}-leave`, name: `Leave ${leg.from || 'for the drive'}`, kind: 'leave', time: min, sort: min + 0.5, note: [leg.route, leg.driveTime].filter(Boolean).join(' · ') });
+    const stops = routeStops(leg.stops, checks);
+    stops.forEach((st, k) => {
+      const t = firstTime(st.at);
+      const spread = min + ((k + 1) / (stops.length + 1)) * hours * 60;
+      items.push({
+        key: `stop-${placeKey(st)}`, name: st.name || '', kind: 'stop', time: t, sort: t !== null && t >= min ? t : spread,
+        note: [st.type, st.note].filter(Boolean).join(' · '), query: st.mapsQuery || st.name, ...at(st.mapsQuery, st.name),
+      });
+    });
+    if (leg.to) items.push({ key: `leg${index}-arrive`, name: `Reach ${leg.to}`, kind: 'arrive', time: null, sort: end, query: leg.to });
+    afterDrive = Math.max(afterDrive, end + 1);
   }
 
+  const driving = items.length > 0;
+  const listed = items.map((i) => words(i.kind === 'arrive' ? i.name.replace(/^Reach /, '') : i.name));
   const d = arr(trip.plan.days).find((x) => x.day === day);
-  const seen = new Set(lists.flat().map((i) => i.key));
-  let last = -1;
-  const acts: TodayItem[] = [];
+  let last = afterDrive;
   arr(d?.activities).forEach((a, i) => {
     const key = a.mapsQuery ? `stop-${placeKey(a)}` : `act${i}`;
-    if (seen.has(key)) return;
-    // "Drive Madurai to Thekkady" repeats the day's drive, which is already listed from the road trip.
-    if (lists.length && /^(drive|depart|leave|start the drive|set off)\b/i.test(`${a.name || ''} ${a.description || ''}`.trim())) return;
+    if (items.some((x) => x.key === key)) return;
+    const text = `${a.name || ''} ${a.description || ''}`.trim();
+    // "Drive Madurai to Thekkady", "Arrive Madurai": already listed from the road trip.
+    if (driving && /^(drive|depart|leave|start the drive|set off|arrive|reach|head back|return)\b/i.test(text)) return;
+    const name = words(a.name || a.description);
+    if (listed.some((x) => sameThing(x, name))) return;
+    listed.push(name);
     const t = firstTime(a.time);
     last = t !== null ? t : last + 1;
-    acts.push({
+    items.push({
       key, name: a.name || a.description || `Activity ${i + 1}`, kind: 'activity', time: t, sort: last,
       note: a.name ? a.description : undefined, query: a.mapsQuery, ...(a.mapsQuery ? at(a.mapsQuery, a.name) : {}),
     });
   });
-  lists.push(acts);
-  return lists.flat().sort((a, b) => a.sort - b.sort);
+  return items.sort((x, y) => x.sort - y.sort);
 }
 
 const ICON: Record<TodayItem['kind'], string> = { leave: 'directions_car', stop: 'pin_drop', arrive: 'flag', activity: 'event' };
@@ -130,7 +144,8 @@ export function TodayView({ trip, onChange, by, weatherSlot, onOpenPlan }: {
   const lastDone = items.reduce((at, i, k) => (isDone(i) ? k : at), -1);
   const next = lastDone >= 0
     ? items.slice(lastDone + 1).find((i) => !isDone(i)) || null
-    : (day === liveDay ? open.find((i) => i.sort >= nowMin - 60) : null) || open[0] || null;
+    // Only things with a stated time are passed over by the clock; untimed stops wait to be ticked.
+    : (day === liveDay ? open.find((i) => i.time === null || i.time >= nowMin - 60) : null) || open[0] || null;
   const nextNav = next && next.kind === 'leave'
     ? items.slice(items.indexOf(next) + 1).find((i) => !isDone(i) && i.kind !== 'leave') || null
     : next;
@@ -140,7 +155,8 @@ export function TodayView({ trip, onChange, by, weatherSlot, onOpenPlan }: {
   const findings = assess(trip).filter((f) => f.day === day && f.level !== 'ok');
   const plan = arr(trip.plan.days).find((x) => x.day === day);
   const date = trip.form.startDate ? addDays(trip.form.startDate, day - 1) : '';
-  const place = legs.length ? legs[legs.length - 1].leg.to || trip.form.destination : trip.form.destination;
+  // The town alone: plans write places like "Thekkady (Kumily)", which the weather lookup can't find.
+  const place = (legs.length ? legs[legs.length - 1].leg.to || trip.form.destination : trip.form.destination).split(/[,(/]/)[0].trim();
 
   // The rest of today's drive in one Google Maps route.
   const driveUrl = (() => {

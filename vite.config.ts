@@ -49,7 +49,8 @@ const underNetlifyDev = Boolean(process.env.NETLIFY_DEV);
 export default defineConfig({
   server: {
     port: 3000,
-    host: '0.0.0.0',
+    // Local only: the dev server runs the AI functions with your OpenAI key, so keep it off the Wi-Fi.
+    host: 'localhost',
     // Under `netlify dev`, the Netlify CLI serves the functions on 8888.
     proxy: underNetlifyDev ? { '/api': { target: 'http://localhost:8888', changeOrigin: true } } : undefined,
   },

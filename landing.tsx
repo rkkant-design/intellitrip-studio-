@@ -12,7 +12,7 @@ import sampleJson from './sample-trip.json';
 import { Logo } from './chrome';
 import { PlanView, type SavedTrip, arr, formatINR } from './tripkit';
 import { RoadRulesCard, fmt } from './roadcheck';
-import { TripMap } from './tripmap';
+import { RouteSketch, TripMap } from './tripmap';
 import { itemsFor } from './today';
 
 /** A real plan IntelliTrip made (Madurai → Thekkady, family of three), with its saved map check. */
@@ -30,7 +30,7 @@ export function SampleCard({ onOpen }: { onOpen: () => void }) {
   const day1 = arr(SAMPLE.plan.days)[0];
   return (
     <section className="it-sample card" aria-labelledby="sample-title">
-      <TripMap trip={SAMPLE} day={1} bare />
+      <RouteSketch trip={SAMPLE} day={1} label={`Day 1 road from ${SAMPLE.form.fromLocation} to ${SAMPLE.form.destination}`} />
       <div className="it-sample-body">
         <div className="it-sample-top">
           <span className="it-eyebrow">Sample trip</span>
@@ -127,6 +127,7 @@ export function SampleView({ onBack, onStart, startLabel }: { onBack: () => void
         <PlanView
           trip={SAMPLE}
           checkProgress={null}
+          showMapCheck={false}
           onRecheck={onStart}
           mapSlot={<TripMap trip={SAMPLE} />}
           rulesSlot={<RoadRulesCard trip={SAMPLE} busy={null} onCheckNotices={onStart} onFix={onStart} />}

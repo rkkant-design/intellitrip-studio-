@@ -157,7 +157,21 @@ export interface Profile {
 // --- STORAGE (this browser only) ---
 
 export const STORAGE_KEY = 'intellitrip_v5_saved';
-const PROFILE_KEY = 'intellitrip_profile';
+export const PROFILE_KEY = 'intellitrip_profile';
+const OWNER_KEY = 'intellitrip_owner';
+
+/**
+ * Makes this browser's saved trips belong to the person signing in. When a different Google account
+ * signs in on the same phone or laptop, the previous person's trips, profile and unfinished jobs are
+ * cleared first (their copies stay in their own account), so nobody's trips leak into another's.
+ */
+export function claimDevice(uid: string, extraKeys: string[] = []) {
+  const owner = store.get<string | null>(OWNER_KEY, null);
+  if (owner && owner !== uid) {
+    for (const k of [STORAGE_KEY, PROFILE_KEY, PENDING_KEY, ...extraKeys]) store.set(k, null);
+  }
+  store.set(OWNER_KEY, uid);
+}
 export const PENDING_KEY = 'intellitrip_pending';
 
 export const store = {
@@ -335,12 +349,17 @@ export async function waitForJob<T>(
   isCancelled?: () => boolean
 ): Promise<T> {
   let misses = 0;
+  // The 12-minute limit counts from when this wait began, not from when the job started: a plan left
+  // running while the app was closed is looked at first, and is usually already finished.
+  const waitingSince = Date.now();
+  let first = true;
   for (;;) {
-    await sleep(4000);
+    if (!first) await sleep(4000);
+    first = false;
     if (isCancelled?.()) throw new Error('cancelled');
     const elapsed = Math.round((Date.now() - startedAt) / 1000);
     const headers = await getHeaders();
-    if (elapsed > MAX_WAIT_S) {
+    if (Date.now() - waitingSince > MAX_WAIT_S * 1000) {
       fetch(`/api/job?id=${encodeURIComponent(jobId)}&cancel=1`, { method: 'POST', headers }).catch(() => undefined);
       throw new Error('This took more than 12 minutes, so it was stopped. Please try again.');
     }
@@ -655,10 +674,11 @@ export function PackingCard({
 }
 
 export function PlanView({
-  trip, packingSlot, changeSlot, rulesSlot, sidebarSlot, mapSlot, checkProgress, onRecheck, onChangeDay,
+  trip, packingSlot, changeSlot, rulesSlot, sidebarSlot, mapSlot, checkProgress, onRecheck, onChangeDay, showMapCheck = true,
 }: {
   trip: SavedTrip;
   mapSlot?: React.ReactNode;
+  showMapCheck?: boolean; // off for the read-only sample, whose map check is fixed
   packingSlot: React.ReactNode;
   changeSlot?: React.ReactNode;
   rulesSlot?: React.ReactNode;
@@ -675,7 +695,7 @@ export function PlanView({
     <div className="results-grid">
       <div className="itinerary-list">
         {changeSlot}
-        <MapCheckCard trip={trip} progress={checkProgress} onRecheck={onRecheck} />
+        {showMapCheck && <MapCheckCard trip={trip} progress={checkProgress} onRecheck={onRecheck} />}
         {mapSlot}
         {rulesSlot}
         {(p.weather || arr(p.alerts).length > 0) && (

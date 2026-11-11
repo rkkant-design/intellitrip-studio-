@@ -13,6 +13,7 @@ import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
 import { placeKey, placesWithKind } from './placecheck';
 import { type SavedTrip, arr } from './tripkit';
+import { SafeArea, webglOk } from './safety';
 
 const MAPBOX_TOKEN = (import.meta as any).env?.VITE_MAPBOX_TOKEN as string | undefined;
 
@@ -73,7 +74,33 @@ export function mapData(trip: SavedTrip): { roads: Road[]; pins: Pin[] } {
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]!));
 
-export function TripMap({ trip, day = 'all', traffic = false, compact = false, bare = false }: {
+type MapProps = {
+  trip: SavedTrip;
+  day?: 'all' | number;
+  traffic?: boolean;
+  compact?: boolean;
+  bare?: boolean;
+};
+
+/** The trip map, with a safety net: if the map can't start, the rest of the page carries on. */
+export function TripMap(props: MapProps) {
+  return (
+    <SafeArea name="Trip map" fallback={<MapUnavailable compact={props.compact} />}>
+      <TripMapInner {...props} />
+    </SafeArea>
+  );
+}
+
+function MapUnavailable({ compact }: { compact?: boolean }) {
+  return (
+    <div className={`card tk-card tm-card ${compact ? 'compact' : ''}`}>
+      <h3 className="tk-h3"><span className="material-symbols-outlined" aria-hidden="true">map</span>{compact ? 'Map' : 'Trip Map'}</h3>
+      <p className="tk-dim tk-small">The map can't run in this browser. Your plan, stops and Navigate buttons all still work; try opening IntelliTrip in Chrome or Safari to see the map.</p>
+    </div>
+  );
+}
+
+function TripMapInner({ trip, day = 'all', traffic = false, compact = false, bare = false }: {
   trip: SavedTrip;
   day?: 'all' | number;
   traffic?: boolean;
@@ -88,6 +115,7 @@ export function TripMap({ trip, day = 'all', traffic = false, compact = false, b
   const map = useRef<mapboxgl.Map | null>(null);
   const markers = useRef<mapboxgl.Marker[]>([]);
   const [ready, setReady] = useState(false);
+  const [failed, setFailed] = useState(() => !webglOk());
 
   useEffect(() => setShown(day), [day]);
   useEffect(() => {
@@ -103,16 +131,23 @@ export function TripMap({ trip, day = 'all', traffic = false, compact = false, b
 
   // Create the map once there's something to draw.
   useEffect(() => {
-    if (!MAPBOX_TOKEN || !online || !hasContent || !box.current || map.current) return;
+    if (failed || !MAPBOX_TOKEN || !online || !hasContent || !box.current || map.current) return;
     mapboxgl.accessToken = MAPBOX_TOKEN;
-    const m = new mapboxgl.Map({
-      container: box.current,
-      style: 'mapbox://styles/mapbox/outdoors-v12',
-      center: [78.5, 11],
-      zoom: 6,
-      attributionControl: true,
-      cooperativeGestures: compact || bare,
-    });
+    let m: mapboxgl.Map;
+    try {
+      m = new mapboxgl.Map({
+        container: box.current,
+        style: 'mapbox://styles/mapbox/outdoors-v12',
+        center: [78.5, 11],
+        zoom: 6,
+        attributionControl: true,
+        cooperativeGestures: compact || bare,
+      });
+    } catch (e) {
+      console.warn('The map could not start:', e);
+      setFailed(true);
+      return;
+    }
     if (!bare) {
       m.addControl(new mapboxgl.NavigationControl({ showCompass: false }), 'top-right');
       m.addControl(new mapboxgl.GeolocateControl({ trackUserLocation: true, showUserHeading: true }), 'top-right');
@@ -131,7 +166,7 @@ export function TripMap({ trip, day = 'all', traffic = false, compact = false, b
       map.current = null;
       setReady(false);
     };
-  }, [online, hasContent, compact, bare]);
+  }, [online, hasContent, compact, bare, failed]);
 
   // Live traffic on the roads, when asked for.
   useEffect(() => {
@@ -186,7 +221,7 @@ export function TripMap({ trip, day = 'all', traffic = false, compact = false, b
   const roadKm = roads.filter((r) => shown === 'all' || r.day === shown).reduce((s, r) => s + r.km, 0);
 
   if (bare) {
-    return hasContent && MAPBOX_TOKEN && online
+    return hasContent && MAPBOX_TOKEN && online && !failed
       ? <div ref={box} className="tm-map tm-bare" role="region" aria-label="Map of the sample trip's first day" />
       : <div className="tm-bare tm-bare-empty" aria-hidden="true"><span className="material-symbols-outlined">map</span></div>;
   }
@@ -195,7 +230,7 @@ export function TripMap({ trip, day = 'all', traffic = false, compact = false, b
     <div className={`card tk-card tm-card ${compact ? 'compact' : ''}`}>
       <div className="tm-head">
         <h3 className="tk-h3"><span className="material-symbols-outlined" aria-hidden="true">map</span>{compact ? 'Map' : 'Trip Map'}</h3>
-        {hasContent && MAPBOX_TOKEN && online && (
+        {hasContent && MAPBOX_TOKEN && online && !failed && (
           <label className="tk-check tm-traffic"><input type="checkbox" checked={withTraffic} onChange={(e) => setWithTraffic(e.target.checked)} /><span>Live traffic</span></label>
         )}
       </div>
@@ -211,6 +246,8 @@ export function TripMap({ trip, day = 'all', traffic = false, compact = false, b
       )}
       {!hasContent ? (
         <p className="tk-dim tk-small">{trip.checks ? 'No places or roads from this plan could be placed on the map.' : 'The map fills in once the map check has run.'}</p>
+      ) : failed ? (
+        <p className="tk-dim tk-small">The map can't run in this browser. Your plan, stops and Navigate buttons all still work; try opening IntelliTrip in Chrome or Safari to see the map.</p>
       ) : !MAPBOX_TOKEN ? (
         <p className="tk-dim tk-small">The map isn't set up here (no Mapbox token).</p>
       ) : !online ? (
@@ -227,5 +264,49 @@ export function TripMap({ trip, day = 'all', traffic = false, compact = false, b
         </>
       )}
     </div>
+  );
+}
+
+/**
+ * A static drawing of a day's road from the saved map check: no map library, no network, no WebGL.
+ * Used on the home page, where it must always work and load fast.
+ */
+export function RouteSketch({ trip, day = 1, label }: { trip: SavedTrip; day?: number; label: string }) {
+  const roads = mapData(trip).roads.filter((r) => r.day === day);
+  const path = roads.flatMap((r) => r.path);
+  const W = 600;
+  const H = 230;
+  if (path.length < 2) {
+    return <div className="tm-sketch tm-sketch-empty" role="img" aria-label={label}><span className="material-symbols-outlined" aria-hidden="true">route</span></div>;
+  }
+  const lats = path.map((p) => p[1]);
+  const lons = path.map((p) => p[0]);
+  const midLat = (Math.min(...lats) + Math.max(...lats)) / 2;
+  const kx = Math.cos((midLat * Math.PI) / 180);
+  const xs = lons.map((x) => x * kx);
+  const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...lats), Math.max(...lats)];
+  const pad = 46;
+  const scale = Math.min((W - pad * 2) / Math.max(x1 - x0, 1e-6), (H - pad * 2) / Math.max(y1 - y0, 1e-6));
+  const ox = (W - (x1 - x0) * scale) / 2;
+  const oy = (H - (y1 - y0) * scale) / 2;
+  const pt = ([lon, lat]: [number, number]) => [ox + (lon * kx - x0) * scale, oy + (y1 - lat) * scale];
+  const d = path.map((p, i) => `${i ? 'L' : 'M'}${pt(p)[0].toFixed(1)} ${pt(p)[1].toFixed(1)}`).join(' ');
+  const start = pt(path[0]);
+  const end = pt(path[path.length - 1]);
+  const townOf = (s?: string) => (s || '').split(/[,(]/)[0].trim();
+  const from = townOf(roads[0].from);
+  const to = townOf(roads[roads.length - 1].to);
+  const anchor = (x: number) => (x > W * 0.65 ? 'end' : x < W * 0.35 ? 'start' : 'middle');
+  return (
+    <svg className="tm-sketch" viewBox={`0 0 ${W} ${H}`} role="img" aria-label={label} preserveAspectRatio="xMidYMid slice">
+      <rect width={W} height={H} fill="#E8EFE6" />
+      <path d={`M0 ${H * 0.72} C${W * 0.2} ${H * 0.6} ${W * 0.4} ${H * 0.86} ${W * 0.62} ${H * 0.74} S${W * 0.9} ${H * 0.8} ${W} ${H * 0.7} L${W} ${H} L0 ${H}Z`} fill="#D9E6D4" />
+      <path d={d} fill="none" stroke="#fff" strokeWidth="9" strokeLinecap="round" strokeLinejoin="round" />
+      <path d={d} fill="none" stroke={dayColor(day)} strokeWidth="4.5" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx={start[0]} cy={start[1]} r="7" fill="#15202B" stroke="#fff" strokeWidth="2.5" />
+      <circle cx={end[0]} cy={end[1]} r="8" fill={dayColor(day)} stroke="#fff" strokeWidth="2.5" />
+      {from && <text x={start[0]} y={start[1] - 14} textAnchor={anchor(start[0])} className="tm-sketch-label">{from}</text>}
+      {to && <text x={end[0]} y={end[1] + 26} textAnchor={anchor(end[0])} className="tm-sketch-label">{to}</text>}
+    </svg>
   );
 }

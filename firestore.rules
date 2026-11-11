@@ -18,7 +18,8 @@ service cloud.firestore {
       function isMember() { return signedIn() && me() in resource.data.members; }
       function isOwner() { return isMember() && resource.data.owner == me(); }
       function changed() { return request.resource.data.diff(resource.data).affectedKeys(); }
-      function tripKeys() { return ['json', 'updatedAt', 'deleted', 'title', 'startDate']; }
+      // What any member may change: the trip itself. Deleting it for everyone is the owner's alone.
+      function tripKeys() { return ['json', 'updatedAt', 'title', 'startDate']; }
       function membersNow() { return request.resource.data.members.toSet(); }
       function membersBefore() { return resource.data.members.toSet(); }
 
@@ -27,15 +28,16 @@ service cloud.firestore {
       allow create: if signedIn()
         && request.resource.data.owner == me()
         && request.resource.data.members == [me()]
+        && request.resource.data.deleted == false
         && request.resource.data.code is string
         && request.resource.data.code.size() >= 16;
 
       // Members edit the trip itself.
       allow update: if isMember() && changed().hasOnly(tripKeys());
 
-      // The owner also manages who is on it and the invite code (and stays on it).
+      // The owner also manages who is on it and the invite code (and stays on it), and can delete it.
       allow update: if isOwner()
-        && changed().hasOnly(tripKeys().concat(['members', 'names', 'code']))
+        && changed().hasOnly(tripKeys().concat(['members', 'names', 'code', 'deleted']))
         && me() in request.resource.data.members
         && request.resource.data.members.size() <= 12
         && request.resource.data.code is string
@@ -44,11 +46,12 @@ service cloud.firestore {
       // Anyone else on it may leave (remove only themselves).
       allow update: if isMember() && !isOwner()
         && changed().hasOnly(['members', 'names'])
-        && membersNow() == membersBefore().difference([me()].toSet());
+        && membersNow() == membersBefore().difference([me()].toSet())
+        && request.resource.data.get('names', {}).diff(resource.data.get('names', {})).affectedKeys().hasOnly([me()]);
 
       // Joining with an invite link: add only yourself, with the current code.
       allow update: if signedIn() && !(me() in resource.data.members)
-        && resource.data.deleted != true
+        && resource.data.get('deleted', false) != true
         && changed().hasOnly(['members', 'names', 'join'])
         && membersNow() == membersBefore().union([me()].toSet())
         && request.resource.data.members.size() <= 12

@@ -8,15 +8,16 @@ import { createRoot } from 'react-dom/client';
 import {
   type FormState, type Profile, type SavedTrip, type Packing, type Plan,
   BookByCard, LeaveCard, PackingCard, PENDING_KEY, PlanView, STORAGE_KEY, TravellersCard,
-  emptyForm, fromTripKit, loadProfile, mmss, normaliseSaved, saveProfile, startJob, store, waitForJob, arr, endDateOf,
+  claimDevice, emptyForm, fromTripKit, loadProfile, mmss, normaliseSaved, saveProfile, startJob, store, waitForJob, arr, endDateOf,
 } from './tripkit';
-import { checkPlan, placesIn } from './placecheck';
+import { type Checks, checkPlan, placesIn } from './placecheck';
 import { ShareSheet } from './share';
 import { TripMap } from './tripmap';
 import { TodayView, dayOnDate, tripToday } from './today';
 import { TogetherSection } from './together';
 import { InstallCard, useInstall } from './install';
 import { AccountMenu, Logo, MainTabs } from './chrome';
+import { AppCrashed, SafeArea } from './safety';
 import { LandingPage, SampleView } from './landing';
 import { WalletCard } from './wallet';
 import { RemindersCard, RemindersSheet } from './reminders';
@@ -390,7 +391,8 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void; onSample: () =>
     if (!trip) return;
     const saved = archives.find((x) => x.id === trip.id);
     if (!saved) setTrip(null);
-    else if ((saved.updatedAt || 0) > (trip.updatedAt || 0)) setTrip(saved);
+    // Newer copy, or new sharing details (a new invite link, someone joined or left), which don't change the version.
+    else if ((saved.updatedAt || 0) > (trip.updatedAt || 0) || JSON.stringify(saved.share || null) !== JSON.stringify(trip.share || null)) setTrip(saved);
   }, [archives, trip]);
 
   // Applies `fn` to the latest saved version of a trip (other edits may have landed meanwhile).
@@ -466,7 +468,15 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void; onSample: () =>
     return () => { cancelled = true; clearInterval(timer); };
   }, [pendingChange, getHeaders, updateTrip, showToast]);
 
+  // Map results belong to the plan they measured. If the plan changed meanwhile (a change landed, or
+  // was undone), they're dropped, and the new plan gets its own check.
+  const saveChecks = useCallback((t: SavedTrip, checks: Checks) => {
+    const measured = JSON.stringify(t.plan);
+    updateTrip(t.id, (cur) => (JSON.stringify(cur.plan) === measured ? { ...cur, checks } : cur));
+  }, [updateTrip]);
+
   // Checks the trip's places and drives against real map data, once at a time.
+  const checkFailedAt = useRef(new Map<string, number>());
   const runChecks = useCallback(async (t: SavedTrip) => {
     if (checkingRef.current) return;
     checkingRef.current = t.id;
@@ -475,16 +485,17 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void; onSample: () =>
       const checks = await checkPlan(t.plan, t.form.fromLocation, t.form.destination,
         (done, total) => setChecking({ tripId: t.id, done, total }),
         // Drives are measured first: show them (map lines, road rules, fuel) while places are looked up.
-        (partial) => patchTrip(t.id, { checks: partial }));
-      patchTrip(t.id, { checks });
+        (partial) => saveChecks(t, partial));
+      saveChecks(t, checks);
     } catch (err) {
+      checkFailedAt.current.set(t.id, Date.now());
       console.error('Map check failed:', err);
       showToast("Couldn't reach the map service. Try Check again later.");
     } finally {
       checkingRef.current = null;
       setChecking(null);
     }
-  }, [patchTrip, showToast]);
+  }, [saveChecks, showToast]);
 
   // The trip on screen (open in the planner, or in Today mode) gets a map check when it has places
   // or drives but none yet. Checks made before road rules or the trip map lack the road paths'
@@ -493,11 +504,14 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void; onSample: () =>
   useEffect(() => {
     const t = onScreen;
     if (!t || checkingRef.current) return;
+    // A check that just failed (no map service answering) waits two minutes before trying again by itself.
+    if (Date.now() - (checkFailedAt.current.get(t.id) || 0) < 120_000) return;
     const hasDrives = Boolean(t.plan.roadTrip && typeof t.plan.roadTrip === 'object' && arr(t.plan.roadTrip.legs).length);
     const needsCheck = (!t.checks || t.checks.partial) && (placesIn(t.plan).length > 0 || hasDrives);
     const beforeMap = Boolean(t.checks && Object.values(t.checks.legs || {}).some((l) => l && (!('hits' in l) || !l.path)));
     if ((needsCheck || beforeMap) && navigator.onLine !== false) runChecks(t);
-  }, [onScreen, runChecks]);
+  // `checking` is listed so a plan that changed during a check gets its own check once that one ends.
+  }, [onScreen, runChecks, checking]);
 
   // Follow a plan job until it's ready. Survives tab switches and page reloads via localStorage.
   useEffect(() => {
@@ -589,7 +603,8 @@ const Dashboard: React.FC<{ user: AppUser; onLogout: () => void; onSample: () =>
       const planSummary = [t.plan.summary, t.plan.weather].filter(Boolean).join(' ');
       const jobId = await startJob('/api/pack', { ...t.form, profile, planSummary }, await getHeaders());
       const packing = await waitForJob<Packing>(jobId, getHeaders, startedAt, (s) => setPackBusy(`Building your list… ${mmss(s)}`));
-      upsertTrip({ ...t, packing: { groups: arr(packing?.groups) }, packed: {} });
+      // Onto the latest copy: spends, ticks and map results may have landed while the list was being made.
+      updateTrip(t.id, (cur) => ({ ...cur, packing: { groups: arr(packing?.groups) }, packed: {} }));
     } catch (err: any) {
       showToast(err?.message || 'Could not make the packing list.');
     } finally {
@@ -1022,8 +1037,10 @@ const App = () => {
     if (!firebaseEnabled || !auth) return;
     const unsub = onAuthStateChanged(auth, (fbUser) => {
       if (fbUser) {
+        claimDevice(fbUser.uid, [PENDING_CHANGE_KEY]);
         setUser({
-          name: fbUser.displayName || fbUser.email || 'Traveller',
+          // Never the email: the name is shown to family on shared trips.
+          name: fbUser.displayName || 'Traveller',
           email: fbUser.email || undefined,
           photo: fbUser.photoURL || undefined,
           uid: fbUser.uid,
@@ -1059,4 +1076,4 @@ const App = () => {
 };
 
 const root = createRoot(document.getElementById('root')!);
-root.render(<App />);
+root.render(<SafeArea name="IntelliTrip" fallback={<AppCrashed />}><App /></SafeArea>);

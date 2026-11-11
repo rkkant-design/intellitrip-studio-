@@ -8,7 +8,7 @@
  */
 
 import type { Handler, HandlerEvent } from '@netlify/functions';
-import { guard, json } from '../shared/guard';
+import { callerOf, guard, json, parseBody } from '../shared/guard';
 import { OpenAIError, startJob } from '../shared/openai';
 import { detailChanges, reviseInput, SYSTEM_PROMPT, type ReviseScope, type TripRequest } from '../shared/prompts';
 
@@ -18,12 +18,8 @@ const handler: Handler = async (event: HandlerEvent) => {
   if (blocked) return blocked;
 
   // `previous` holds the trip details before this change, when the person edited them.
-  let body: TripRequest & { plan?: unknown; scope?: ReviseScope; change?: string; previous?: TripRequest };
-  try {
-    body = JSON.parse(event.body || '{}');
-  } catch {
-    return json(400, { error: 'Invalid request body.' });
-  }
+  const body = parseBody<TripRequest & { plan?: unknown; scope?: ReviseScope; change?: string; previous?: TripRequest }>(event);
+  if (!body) return json(400, { error: 'Invalid request body.' });
   const change = String(body.change || '').trim();
   const plan = body.plan;
   const detailsChanged = detailChanges(body.previous, body).length > 0;
@@ -32,10 +28,10 @@ const handler: Handler = async (event: HandlerEvent) => {
   if (!change && !detailsChanged) return json(400, { error: 'Please say what should change.' });
   if (!plan || typeof plan !== 'object' || !Array.isArray((plan as any).days)) return json(400, { error: 'Missing the current plan.' });
   if (scope !== 'all' && !(plan as any).days.some((d: any) => d?.day === scope)) return json(400, { error: 'That day is not in the plan.' });
-  if (JSON.stringify(plan).length > 200_000) return json(400, { error: 'This plan is too large to change.' });
+  if (JSON.stringify(plan).length > 80_000) return json(400, { error: 'This plan is too large to change.' });
 
   try {
-    const jobId = await startJob(SYSTEM_PROMPT, reviseInput(body, plan, scope, change, body.previous));
+    const jobId = await startJob(SYSTEM_PROMPT, reviseInput(body, plan, scope, change, body.previous), { uid: callerOf.get(event) });
     return json(200, { jobId });
   } catch (err) {
     console.error('Revise start failed:', err);

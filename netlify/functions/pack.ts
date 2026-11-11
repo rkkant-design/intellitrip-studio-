@@ -7,7 +7,7 @@
  */
 
 import type { Handler, HandlerEvent } from '@netlify/functions';
-import { guard, json } from '../shared/guard';
+import { callerOf, guard, json, parseBody } from '../shared/guard';
 import { OpenAIError, startJob } from '../shared/openai';
 import { PACK_SCHEMA, SYSTEM_PROMPT, tripContext, type TripRequest } from '../shared/prompts';
 
@@ -16,17 +16,14 @@ const handler: Handler = async (event: HandlerEvent) => {
   const blocked = await guard(event, 'start', Number(process.env.RATE_LIMIT_PER_MIN || 10));
   if (blocked) return blocked;
 
-  let req: TripRequest & { planSummary?: string };
-  try {
-    req = JSON.parse(event.body || '{}');
-  } catch {
-    return json(400, { error: 'Invalid request body.' });
-  }
+  const parsed = parseBody<TripRequest & { planSummary?: string }>(event);
+  if (!parsed) return json(400, { error: 'Invalid request body.' });
+  const req: TripRequest & { planSummary?: string } = parsed;
   if (!String(req.destination || '').trim()) return json(400, { error: 'Missing trip details.' });
 
   try {
     const summary = String(req.planSummary || '').slice(0, 1500);
-    const jobId = await startJob(SYSTEM_PROMPT, tripContext(req) + '\nPlan summary: ' + summary + '\n\n' + PACK_SCHEMA);
+    const jobId = await startJob(SYSTEM_PROMPT, tripContext(req) + '\nPlan summary: ' + summary + '\n\n' + PACK_SCHEMA, { uid: callerOf.get(event) });
     return json(200, { jobId });
   } catch (err) {
     console.error('Packing list start failed:', err);

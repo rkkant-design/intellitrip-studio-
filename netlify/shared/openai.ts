@@ -14,6 +14,8 @@ export const MODEL = process.env.OPENAI_MODEL || 'gpt-5';
 const REASONING_EFFORT = process.env.REASONING_EFFORT || 'low';
 const WEB_SEARCH = (process.env.WEB_SEARCH ?? 'true').toLowerCase() !== 'false';
 const MAX_SEARCHES = Number(process.env.MAX_SEARCHES || 15);
+// A ceiling on what one job may write (reasoning included), so a single request can't run up the bill.
+const MAX_OUTPUT_TOKENS = Number(process.env.MAX_OUTPUT_TOKENS || 40000);
 
 export class OpenAIError extends Error {
   constructor(public status: number, message: string) {
@@ -23,6 +25,7 @@ export class OpenAIError extends Error {
 
 async function request(method: string, path: string, body?: unknown) {
   const res = await fetch(API + path, {
+    signal: AbortSignal.timeout(8000),
     method,
     headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -39,10 +42,11 @@ async function request(method: string, path: string, body?: unknown) {
 }
 
 /** Starts a background job and returns its response id. `maxSearches` caps web searches for quick lookups. */
-export async function startJob(instructions: string, input: string, opts: { maxSearches?: number } = {}): Promise<string> {
-  const base: Record<string, unknown> = { model: MODEL, instructions, input, background: true };
+export async function startJob(instructions: string, input: string, opts: { maxSearches?: number; uid?: string | null } = {}): Promise<string> {
+  // The job remembers who started it, so only they can read or cancel it.
+  const base: Record<string, unknown> = { model: MODEL, instructions, input, background: true, ...(opts.uid ? { metadata: { uid: opts.uid } } : {}) };
   // Optional speed limits; dropped one by one if this model or account rejects them.
-  const extras: Record<string, unknown> = {};
+  const extras: Record<string, unknown> = { max_output_tokens: MAX_OUTPUT_TOKENS };
   if (MODEL.startsWith('gpt-5') || /^o\d/.test(MODEL)) extras.reasoning = { effort: REASONING_EFFORT };
   if (WEB_SEARCH) extras.max_tool_calls = Math.min(MAX_SEARCHES, opts.maxSearches ?? MAX_SEARCHES);
   const toolOptions: (unknown[] | null)[] = WEB_SEARCH

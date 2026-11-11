@@ -779,3 +779,9 @@ h1, h2, h3 { color: var(--text-bright); letter-spacing: -0.01em; }
 .it-mapline .tk-grow { min-width: 0; }
 .it-link { background: none; border: none; padding: 0.4rem 0.2rem; min-height: 36px; color: var(--primary-dark); font: inherit; font-weight: 700; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; flex: none; }
 .it-detour { margin-bottom: 1rem; }
+
+/* --- Safety nets --- */
+.tm-sketch { display: block; width: 100%; height: 230px; }
+.tm-sketch-empty { background: #E8EFE6; display: flex; align-items: center; justify-content: center; color: var(--text-dim); }
+.tm-sketch-label { font: 700 15px var(--font); fill: #15202B; paint-order: stroke; stroke: #E8EFE6; stroke-width: 5px; }
+.it-crash { max-width: 420px; margin: 20vh auto 0; padding: 0 1rem; display: flex; flex-direction: column; gap: 1rem; text-align: center; }
