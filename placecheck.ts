@@ -18,7 +18,7 @@
  */
 
 import type { Place, Plan } from './tripkit';
-import { ROAD_RULES } from './roadrules';
+import { ROAD_RULES, STATE_NAMES } from './roadrules';
 
 export interface PlaceCheck {
   // skipped: too vague to look up; unchecked: the map service didn't answer.
@@ -69,7 +69,7 @@ const GENERIC = new Set([
   'sunrise', 'sunset', 'tea', 'temple', 'the', 'tiffin', 'to', 'top', 'trail', 'unwind', 'veg', 'vegetarian', 'view',
   'viewpoint', 'village', 'visit', 'walk', 'waterfall', 'arulmigu', 'tamil', 'nadu', 'kerala', 'karnataka', 'india',
   'ticket', 'tickets', 'entrance', 'entry', 'counter', 'trailhead', 'base', 'arrive', 'arrival', 'halt', 'pause',
-  'with', 'tour', 'boat', 'stretch', 'leg', 'checkout',
+  'with', 'tour', 'boat', 'stretch', 'leg', 'checkout', 'eco', 'tourism', 'tourist',
 ]);
 
 const tokens = (s: string) =>
@@ -152,11 +152,33 @@ const olaKindFits = (kind: Kind, types: string[]) => {
   return types.some((t) => OLA_SIGHT.has(t)) && !types.some((t) => OLA_FOOD.has(t) || OLA_STAY.has(t));
 };
 
+// What kind of spot a name says it is. Places share a local name ("Chellarkovil Viewpoint", "Chellarkovil
+// Waterfalls"), so a viewpoint must not match a waterfall. Names that say nothing about the spot pass.
+const SPOTS: [string, RegExp][] = [
+  ['view', /\b(view\s?point|view|point|lookout|watchtower|tower)\b/i], ['falls', /\b(falls|water\s?falls?)\b/i],
+  ['temple', /\b(temple|kovil|koil|mandir|devasthanam|shrine)\b/i], ['dam', /\bdam\b/i], ['lake', /\b(lake|reservoir)\b/i],
+  ['park', /\b(park|garden|gardens)\b/i], ['museum', /\bmuseum\b/i], ['fort', /\b(fort|palace)\b/i], ['beach', /\bbeach\b/i],
+  ['peak', /\b(peak|summit|rocks?|hill top)\b/i], ['church', /\b(church|basilica)\b/i], ['mosque', /\b(mosque|masjid|dargah)\b/i],
+  ['cave', /\bcaves?\b/i],
+];
+const spotsOf = (name: string) => new Set(SPOTS.filter(([, re]) => re.test(name)).map(([k]) => k));
+const sameSpot = (wantedName: string, candidate: string) => {
+  const a = spotsOf(wantedName);
+  const b = spotsOf(candidate);
+  return !a.size || !b.size || [...a].some((k) => b.has(k));
+};
+
 /** Stricter than namesMatch, for Ola's looser search: (nearly) every distinctive word must be there, and no road names. */
 const olaNameFits = (wanted: string[], placeName: string, candidate: string) => {
   if (!namesMatch(wanted, candidate)) return false;
+  // Ola's search is loose, so a named spot must be the same spot ("Mannavanur Lake" is not "ICAR Agri Eco Tourism").
+  const want = spotsOf(placeName);
+  if (want.size && ![...spotsOf(candidate)].some((k) => want.has(k))) return false;
+  // Three quarters of the shorter name's distinctive words ("Shenbaganur Museum" is "Shembaganur Museum of
+  // Natural History"; "Periyar Jungle Way Jeep Safari" is not "Periyar Lake Boat Safari").
   const c = tokens(candidate);
-  if (wanted.filter((w) => c.some((y) => sameWord(w, y))).length / wanted.length < 0.75) return false;
+  const cDistinct = c.filter((t) => t.length > 2 && !GENERIC.has(t)).length || 1;
+  if (wanted.filter((w) => c.some((y) => sameWord(w, y))).length / Math.min(wanted.length, cDistinct) < 0.75) return false;
   return !ROAD_NAME.test(candidate.split(/[|(]/)[0].trim()) || ROAD_NAME.test(placeName);
 };
 
@@ -182,6 +204,8 @@ const PHOTON = 'photon.komoot.io';
 const OLA = 'ola';
 // The backup place search for this run (Ola Maps through /api/places), when the app provides one.
 let backup: PlaceSearch | null = null;
+// Where Ola's town search should look first in this run (the start, once it is known).
+let townBias: { lat: number; lon: number } | null = null;
 
 /** JSON from a free map service, or null when it didn't answer. Backs off when told to slow down. */
 async function getJson(url: string) {
@@ -227,62 +251,104 @@ const nameLike = (query: string, got: string) =>
 
 interface Point { lat: number; lon: number; name?: string }
 
-const townCache = new Map<string, Point | null>();
-
 // Plans sometimes write towns as "Tiruchirappalli (Trichy) — stay near the bypass" or "Kumily Junction":
 // keep the town itself.
 const townOnly = (name: string) =>
   name.split(/[,(/—–]| - /)[0].replace(/\b(junction|jn|bypass|road|bus stand|town|city|centre|center)\b\.?/gi, ' ').replace(/\s+/g, ' ').trim();
 
+// Every candidate each source gave for a town name, kept for the run. Candidates rather than one answer,
+// because callers differ on where the town must be (the leg a stop is on, the district the plan names).
+const townCands = new Map<string, Promise<Point[]>>();
+const candidates = (key: string, load: () => Promise<Point[]>) => {
+  if (!townCands.has(key)) townCands.set(key, load().catch(() => []));
+  return townCands.get(key)!;
+};
+
+// Ola place types that a town, village or area can have (Ola files some villages as an address).
+const OLA_TOWNISH = /^(locality|sublocality.*|administrative_area.*|political|street_address|borough|neighbou?rhood|colloquial_area)$/;
+
 /**
- * Coordinates of a town, hill station or area. Candidates come from Open-Meteo's geocoder and
- * OpenStreetMap; the first that has the right name and passes `fits` wins. Small places share names
- * across the state (there are two Sirumalais), so callers say where the right one must be.
+ * Coordinates of a town, hill station or area. Candidates come from Open-Meteo's geocoder, then
+ * OpenStreetMap, then Ola Maps; the first that has the right name and passes `fits` wins. Small places
+ * share names across the state (there are eight Andipattis in Tamil Nadu), so callers say where the right
+ * one must be.
  */
 export async function findTown(name: string, fits: (p: Point) => boolean = inCorridor): Promise<Point | null> {
   const first = townOnly(name);
   const key = first.toLowerCase();
   if (!key) return null;
-  if (townCache.has(key)) return townCache.get(key)!;
-  let point: Point | null = null;
   // Try the name as written, then its other common names.
   const spellings = [first, ...aliasesOf(tokens(first)[0] || '').filter((a) => !sameWord(a, tokens(first)[0] || ''))];
-  for (const spelling of spellings) {
-    const om = await getJson(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(spelling)}&count=10&language=en&format=json`);
-    for (const r of om?.results || []) {
-      const cand = { lat: r.latitude, lon: r.longitude, name: r.name };
-      if (r.country_code === 'IN' && nameLike(first, r.name) && fits(cand)) { point = cand; break; }
+  const om = await candidates(`om|${key}`, async () => {
+    const out: Point[] = [];
+    for (const spelling of spellings) {
+      const data = await getJson(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(spelling)}&count=10&language=en&format=json`);
+      for (const r of data?.results || []) {
+        if (r.country_code === 'IN' && nameLike(first, r.name)) out.push({ lat: r.latitude, lon: r.longitude, name: r.name });
+      }
     }
-    if (point) break;
-  }
-  if (!point) {
-    // Hill stations are often mapped as an area (a reserve forest, a hill range), not a town.
-    const ph = await getJson(`https://photon.komoot.io/api/?q=${encodeURIComponent(first)}&limit=10`);
-    for (const f of ph?.features || []) {
+    return out;
+  });
+  const hit = om.find(fits);
+  if (hit) return hit;
+  // Hill stations are often mapped as an area (a reserve forest, a hill range), not a town.
+  const ph = await candidates(`ph|${key}`, async () => {
+    const data = await getJson(`https://photon.komoot.io/api/?q=${encodeURIComponent(first)}&limit=10`);
+    return (data?.features || []).flatMap((f: any) => {
       const props = f.properties || {};
-      if (!['place', 'natural', 'boundary'].includes(String(props.osm_key))) continue;
-      if (props.countrycode && props.countrycode !== 'IN') continue;
-      const cand = { lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0], name: props.name };
-      if (nameLike(first, String(cand.name || '')) && fits(cand)) { point = cand; break; }
-    }
-  }
-  townCache.set(key, point);
-  return point;
+      if (!['place', 'natural', 'boundary'].includes(String(props.osm_key))) return [];
+      if (props.countrycode && props.countrycode !== 'IN') return [];
+      return nameLike(first, String(props.name || '')) ? [{ lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0], name: props.name }] : [];
+    });
+  });
+  const phHit = ph.find(fits);
+  if (phHit) return phHit;
+  // Ola Maps knows many villages the free geocoders don't (the Andipatti near Theni, Anakkara in Idukki).
+  if (!backup || down.has(OLA)) return null;
+  const search = backup;
+  const ola = await candidates(`ola|${key}`, async () => {
+    const hits = await search(first, townBias).catch(() => null);
+    if (!hits) { down.add(OLA); return []; }
+    stats.answered++;
+    const head = tokens(first)[0] || '';
+    const named = (h: PlaceHit) => Number(sameWord(head, tokens(h.name)[0] || ''));
+    return hits
+      .filter((h) => (h.types || []).every((t) => OLA_TOWNISH.test(t)) && nameLike(first, h.name))
+      // A result named after the town itself first, before an address that merely mentions it.
+      .sort((a, b) => named(b) - named(a))
+      .map((h) => ({ lat: h.lat, lon: h.lon, name: h.name }));
+  });
+  return ola.find(fits) || null;
 }
+
+// A state or the country, not a town ("Kerala", "Tamil Nadu", "India").
+const REGION_NAMES = new Set([...Object.values(STATE_NAMES), 'India'].map((n) => tokens(n).join(' ')));
+const isRegionName = (s: string) => REGION_NAMES.has(tokens(s).join(' '));
 
 const JOURNEY_STEP = /^(drive|arrive|depart|head|return|leave|reach|transfer|travel|set off|start)\b/i;
 
 /** Looks one place up on OpenStreetMap, then Ola Maps. */
-async function findPlace(p: Place, kind: Kind, region: Point | null, ignore: string[]): Promise<PlaceCheck> {
+async function findPlace(p: Place, kind: Kind, region: Point | null, ignore: string[], townFits: (p: Point) => boolean = inCorridor): Promise<PlaceCheck> {
   const name = (p.name || '').trim();
   const parts = (p.mapsQuery || '').split(',').map((s) => s.trim()).filter(Boolean);
   const town = parts.length > 1 ? parts[1] : '';
-  const wanted = distinctiveWords(name, [...parts.slice(1), ...ignore]);
+  const skip = [...parts.slice(1), ...ignore];
+  // "Valanjanganam (Ninnumullippara) Waterfalls": the name in brackets is another name for the same place,
+  // so either may match. Notes in brackets ("(tea break)", "(sunset)") are made of generic words and drop out.
+  const mainName = name.replace(/\([^)]*\)/g, ' ').replace(/\s+/g, ' ').trim();
+  const alternates = [...name.matchAll(/\(([^)]*)\)/g)]
+    .map((m) => distinctiveWords(m[1], skip))
+    .filter((w) => w.length && w.every((x) => x.length >= 5));
+  const named = distinctiveWords(mainName, skip);
+  const wanted = named.length ? named : alternates.shift() || [];
+  const nameSets = [wanted, ...alternates];
   // Nothing that identifies a particular place ("Check-in and unwind", "Veg lunch at Kumily"): don't guess.
   if (!wanted.length) return { status: 'skipped' };
   // A step of the journey, not a place ("Drive Madurai → Thekkady with Theni coffee halt", "Head back to Kochi").
   if (JOURNEY_STEP.test(name)) return { status: 'skipped' };
-  const townPoint = town ? await findTown(town) : null;
+  // The part after the town is often the district ("Vaigai Dam Park, Andipatti, Theni"): the town must be near it.
+  const district = parts.length > 2 && !isRegionName(parts[2]) && !sameWord(tokens(parts[2])[0] || '', tokens(town)[0] || '') ? await findTown(parts[2]) : null;
+  const townPoint = town && !isRegionName(town) ? await findTown(town, (c) => townFits(c) && (!district || km(district, c) <= 50)) : null;
   const anchor = townPoint || region;
   // A single short word ("Arya") is a weak name, so it has to be right next to the town.
   const weakName = wanted.length === 1 && wanted[0].length < 5;
@@ -305,8 +371,10 @@ async function findPlace(p: Place, kind: Kind, region: Point | null, ignore: str
     for (const f of data?.features || []) {
       const props = f.properties || {};
       const cand = String(props.name || '');
-      if (!cand || !namesMatch(wanted, cand)) continue;
+      if (!cand || !nameSets.some((w) => namesMatch(w, cand)) || !sameSpot(mainName, cand)) continue;
       if (!kindFits(kind, String(props.osm_key || ''), String(props.osm_value || ''))) continue;
+      // "Chellarkovil Viewpoint" is a spot near the village, not the village itself: leave it to a better match.
+      if (props.osm_key === 'place' && spotsOf(mainName).size) continue;
       const point = { lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0] };
       if (anchor && km(anchor, point) > maxKm) continue;
       if (!townPoint && !nearRoute(point)) continue;
@@ -323,14 +391,19 @@ async function findPlace(p: Place, kind: Kind, region: Point | null, ignore: str
 
   // OpenStreetMap is down or doesn't know it: ask Ola Maps, with the same name, kind and distance checks.
   if (backup && !down.has(OLA)) {
-    const olaQueries = [p.mapsQuery, name.replace(/\([^)]*\)/g, ' ').trim()].filter((q, i, all): q is string => Boolean(q) && all.indexOf(q) === i);
+    // Ola's search wants the name itself: "Sri Sivaa Restaurant Theni" finds it, "...Pure Veg Theni" doesn't.
+    const core = mainName.replace(/\b(pure\s*veg(etarian)?|veg|non[- ]?veg|a\/?c|family)\b/gi, ' ').replace(/\s+/g, ' ').trim();
+    const townName = town && !isRegionName(town) ? townOnly(town) : '';
+    // Last, the distinctive words alone ("Chellarkovil" lists "Chellarkovilmedu View Point"; the full name doesn't).
+    const olaQueries = [p.mapsQuery, townName ? `${core} ${townName}` : '', core, ...alternates.map((w) => w.join(' ')), wanted.join(' ')]
+      .filter((q, i, all): q is string => Boolean(q) && all.indexOf(q) === i);
     for (const q of olaQueries) {
       const hits = await backup(q, anchor).catch(() => null);
       if (!hits) { down.add(OLA); break; }
       answered++;
       stats.answered++;
       for (const h of hits) {
-        if (!h.name || !olaNameFits(wanted, name, h.name)) continue;
+        if (!h.name || !nameSets.some((w) => olaNameFits(w, name, h.name))) continue;
         if (!olaKindFits(kind, h.types || [])) continue;
         const point = { lat: h.lat, lon: h.lon };
         if (anchor && km(anchor, point) > maxKm) continue;
@@ -476,10 +549,12 @@ export async function checkPlan(
   stats.answered = 0;
   down.clear();
   backup = placeSearch || null;
-  townCache.clear();
+  townCands.clear();
+  townBias = null;
   inCorridor = () => true;
   nearRoute = () => true;
   const fromPt = await findTown(from);
+  townBias = fromPt;
   // The plan's own road distance to the destination rules out namesakes far away: a place more
   // than that far in a straight line can't be the one meant.
   // With no distance given, the drive time stands in (at most ~75 km an hour): India has many towns of
@@ -526,9 +601,14 @@ export async function checkPlan(
   // 2. Places, one lookup at a time to stay within Photon's fair use; pins appear as they're found.
   const region = destPt || fromPt;
   const ignore = [townOnly(from), townOnly(destination)];
+  // A stop on a drive is in a town along that drive, not a namesake elsewhere in the corridor.
+  const legOf = new Map<string, number>();
+  legs.forEach((l, i) => arr(l.stops).forEach((st) => { if (!legOf.has(placeKey(st))) legOf.set(placeKey(st), i); }));
   for (let k = 0; k < places.length; k++) {
     const item = places[k];
-    results[placeKey(item.p)] = await findPlace(item.p, item.kind, region, ignore);
+    const pair = ends[legOf.get(placeKey(item.p)) ?? -1];
+    const townFits = pair ? (c: Point) => km(pair[0], c) + km(c, pair[1]) <= km(pair[0], pair[1]) * 1.15 + 25 : inCorridor;
+    results[placeKey(item.p)] = await findPlace(item.p, item.kind, region, ignore, townFits);
     tick();
     if ((k + 1) % 6 === 0 && k + 1 < places.length) onPartial?.(snapshot(true));
   }
